@@ -3,11 +3,15 @@
 /* eslint-disable */
 // @ts-nocheck
 export type FluentMessageId =
-  | 'command-draft-created'
+  | 'command-analysis-complete'
+  | 'command-analysis-findings'
+  | 'command-analysis-table'
+  | 'command-analysis-warnings'
   | 'command-draft-item'
   | 'command-draft-page'
   | 'command-draft-selection'
   | 'command-reader-required'
+  | 'command-selection-required'
   | 'item-info-row-example-label'
   | 'item-section-example1-head-text'
   | 'item-section-example1-sidenav-tooltip'
@@ -24,9 +28,10 @@ export type FluentMessageId =
   | 'pref-title'
   | 'prefs-table-detail'
   | 'prefs-table-title'
+  | 'prefs-title'
   | 'prompt-command-label'
   | 'prompt-command-name'
-  | 'prefs-title'
+  | 'report-dialog-title'
   | 'startup-begin'
   | 'startup-finish'
   | 'tabpanel-lib-tab-label'

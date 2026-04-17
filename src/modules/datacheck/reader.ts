@@ -49,7 +49,7 @@ export function createTableSelectionDraft(
   context: ReaderAuditContext,
 ): TableSelectionDraft {
   return {
-    source: "reader-bootstrap",
+    source: "reader-text-selection",
     attachmentID: context.attachmentID,
     attachmentKey: context.attachmentKey,
     itemTitle: context.itemTitle,

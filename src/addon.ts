@@ -2,7 +2,9 @@ import { config } from "../package.json";
 import { ColumnOptions, DialogHelper } from "zotero-plugin-toolkit";
 import hooks from "./hooks";
 import type {
+  AuditReport,
   ReaderAuditContext,
+  TableDocument,
   TableSelectionDraft,
 } from "./modules/datacheck/types";
 import { createZToolkit } from "./utils/ztoolkit";
@@ -14,6 +16,7 @@ class Addon {
     // Env type, see build.js
     env: "development" | "production";
     initialized?: boolean;
+    startupError?: string;
     ztoolkit: ZToolkit;
     locale?: {
       current: any;
@@ -27,6 +30,8 @@ class Addon {
     dataCheck: {
       lastReaderContext?: ReaderAuditContext;
       lastSelectionDraft?: TableSelectionDraft;
+      lastTableDocument?: TableDocument;
+      lastAuditReport?: AuditReport;
     };
   };
   // Lifecycle hooks
@@ -40,6 +45,7 @@ class Addon {
       config,
       env: __env__,
       initialized: false,
+      startupError: undefined,
       ztoolkit: createZToolkit(),
       dataCheck: {},
     };

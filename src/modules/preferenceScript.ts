@@ -30,7 +30,7 @@ export async function registerPrefsScripts(_window: Window) {
         },
         {
           title: "Next implementation step",
-          detail: "Reader context capture and manual selection bootstrap",
+          detail: "Selected-text table parsing and anomaly report dialog",
         },
       ],
     };

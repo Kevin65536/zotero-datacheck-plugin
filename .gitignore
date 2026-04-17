@@ -12,6 +12,7 @@ tsconfig.tsbuildinfo
 # Zotero plugin scaffold
 .env
 .scaffold
+.serena
 build
 logs
 

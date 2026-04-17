@@ -4,20 +4,30 @@ import { getString, initLocale } from "./utils/locale";
 import { createZToolkit } from "./utils/ztoolkit";
 
 async function onStartup() {
-  await Promise.all([
-    Zotero.initializationPromise,
-    Zotero.unlockPromise,
-    Zotero.uiReadyPromise,
-  ]);
+  try {
+    await Promise.all([
+      Zotero.initializationPromise,
+      Zotero.unlockPromise,
+      Zotero.uiReadyPromise,
+    ]);
 
-  initLocale();
-  DataCheckCommandFactory.registerPromptCommand();
+    initLocale();
+    addon.api = {
+      ...addon.api,
+      runAnalyzeCurrentReader: () => void DataCheckCommandFactory.runAnalyzeCurrentReader(),
+    };
 
-  await Promise.all(
-    Zotero.getMainWindows().map((win) => onMainWindowLoad(win)),
-  );
-
-  addon.data.initialized = true;
+    await Promise.all(
+      Zotero.getMainWindows().map((win) => onMainWindowLoad(win)),
+    );
+  } catch (error) {
+    const startupError =
+      error instanceof Error ? error : new Error(String(error));
+    addon.data.startupError = startupError.stack ?? startupError.message;
+    Zotero.logError(startupError);
+  } finally {
+    addon.data.initialized = true;
+  }
 }
 
 async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
@@ -27,7 +37,8 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
     `${addon.data.config.addonRef}-mainWindow.ftl`,
   );
 
-  DataCheckCommandFactory.registerWindowMenu();
+  DataCheckCommandFactory.registerPromptCommand();
+  DataCheckCommandFactory.registerWindowMenu(win);
 
   const popupWin = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
     closeOnClick: true,
@@ -50,6 +61,7 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
 }
 
 async function onMainWindowUnload(_win: Window): Promise<void> {
+  DataCheckCommandFactory.unregisterWindowMenu(_win);
   ztoolkit.unregisterAll();
   addon.data.dialog?.window?.close();
 }
