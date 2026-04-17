@@ -1,0 +1,11 @@
+item-section-example1-head-text =
+    .label = DataCheck: Item Context
+item-section-example1-sidenav-tooltip =
+    .tooltiptext = DataCheck item context section
+item-section-example2-head-text =
+    .label = DataCheck: Reader [{$status}]
+item-section-example2-sidenav-tooltip =
+    .tooltiptext = DataCheck reader section
+item-section-example2-button-tooltip =
+    .tooltiptext = Remove this section
+item-info-row-example-label = DataCheck Status

@@ -1,0 +1,11 @@
+item-section-example1-head-text =
+    .label = DataCheck：条目上下文
+item-section-example1-sidenav-tooltip =
+    .tooltiptext = DataCheck 条目上下文面板
+item-section-example2-head-text =
+    .label = DataCheck：阅读器[{$status}]
+item-section-example2-sidenav-tooltip =
+    .tooltiptext = DataCheck 阅读器面板
+item-section-example2-button-tooltip =
+    .tooltiptext = 移除此面板
+item-info-row-example-label = DataCheck 状态
