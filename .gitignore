@@ -1,0 +1,34 @@
+# dot files
+.DS_Store
+
+# Node.js
+node_modules
+pnpm-lock.yaml
+yarn.lock
+
+# TypeScript
+tsconfig.tsbuildinfo
+
+# Zotero plugin scaffold
+.env
+.scaffold
+build
+logs# dot files
+.DS_Store
+
+# Node.js
+node_modules
+pnpm-lock.yaml
+yarn.lock
+
+# TSC
+tsconfig.tsbuildinfo
+
+# Scaffold
+.env
+.scaffold
+build
+logs
+
+# Test outputs
+coverage
