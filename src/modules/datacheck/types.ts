@@ -6,10 +6,13 @@ export interface ReaderAuditContext {
   selectedText: string;
   selectedTextLength: number;
   capturedAt: string;
+  structuredRows?: string[][];
+  selectionRectCount?: number;
+  extractionDiagnostics?: string[];
 }
 
 export interface TableSelectionDraft {
-  source: "reader-text-selection";
+  source: "reader-text-selection" | "reader-structured-selection";
   attachmentID: number;
   attachmentKey: string;
   itemTitle: string;
@@ -17,6 +20,9 @@ export interface TableSelectionDraft {
   selectedText: string;
   selectedTextLength: number;
   capturedAt: string;
+  structuredRows?: string[][];
+  selectionRectCount?: number;
+  extractionDiagnostics?: string[];
 }
 
 export interface ParsedNumericValue {
@@ -47,6 +53,7 @@ export interface TableDocument {
   pageNumber?: number;
   capturedAt: string;
   rawText: string;
+  selectionRectCount?: number;
   header?: string[];
   headerRowIndex?: number;
   rows: TableRow[];

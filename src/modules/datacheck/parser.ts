@@ -33,12 +33,24 @@ const DELIMITER_CANDIDATES: DelimiterCandidate[] = [
 export function parseTableSelection(
   draft: TableSelectionDraft,
 ): TableDocument {
+  const structuredRows = normalizeStructuredRows(draft.structuredRows);
+  if (structuredRows.length) {
+    const rawText = structuredRows.map((row) => row.join("\t")).join("\n");
+    const reconstructionWarnings = [...(draft.extractionDiagnostics ?? [])];
+    return buildTableDocumentFromRows(
+      draft,
+      rawText,
+      structuredRows,
+      reconstructionWarnings,
+    );
+  }
+
   const rawText = draft.selectedText.replace(/\r\n?/g, "\n");
   const lines = rawText
     .split("\n")
     .map((line) => line.replace(/\u00a0/g, " ").trim())
     .filter(Boolean);
-  const reconstructionWarnings: string[] = [];
+  const reconstructionWarnings: string[] = [...(draft.extractionDiagnostics ?? [])];
 
   if (lines.length < 2) {
     reconstructionWarnings.push(
@@ -76,11 +88,35 @@ export function parseTableSelection(
     );
   }
 
-  const headerRowIndex = inferHeaderRowIndex(paddedRows);
-  const header =
-    headerRowIndex === undefined ? undefined : [...paddedRows[headerRowIndex]];
+  return buildTableDocumentFromRows(
+    draft,
+    rawText,
+    paddedRows,
+    reconstructionWarnings,
+  );
+}
 
-  const rows = paddedRows.map<TableRow>((row, rowIndex) => ({
+function buildTableDocumentFromRows(
+  draft: TableSelectionDraft,
+  rawText: string,
+  paddedRows: string[][],
+  reconstructionWarnings: string[],
+): TableDocument {
+  const columnCount = Math.max(1, ...paddedRows.map((row) => row.length));
+
+  const normalizedRows = paddedRows.map((row) => {
+    const nextRow = [...row];
+    while (nextRow.length < columnCount) {
+      nextRow.push("");
+    }
+    return nextRow;
+  });
+
+  const headerRowIndex = inferHeaderRowIndex(normalizedRows);
+  const header =
+    headerRowIndex === undefined ? undefined : [...normalizedRows[headerRowIndex]];
+
+  const rows = normalizedRows.map<TableRow>((row, rowIndex) => ({
     index: rowIndex,
     cells: row.map<TableCell>((rawCell, columnIndex) => {
       const normalizedText = normalizeCellText(rawCell);
@@ -106,6 +142,7 @@ export function parseTableSelection(
     pageNumber: draft.pageNumber,
     capturedAt: draft.capturedAt,
     rawText,
+    selectionRectCount: draft.selectionRectCount,
     header,
     headerRowIndex,
     rows,
@@ -114,6 +151,16 @@ export function parseTableSelection(
     numericCellCount,
     reconstructionWarnings,
   };
+}
+
+function normalizeStructuredRows(rows: string[][] | undefined): string[][] {
+  if (!rows?.length) {
+    return [];
+  }
+
+  return rows
+    .map((row) => row.map((cell) => normalizeCellText(cell)))
+    .filter((row) => row.some((cell) => cell.length > 0));
 }
 
 export function parseNumericValue(

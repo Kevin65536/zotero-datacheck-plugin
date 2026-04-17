@@ -11,6 +11,8 @@ type Detector = (table: TableDocument) => DetectorResult;
 const DETECTORS: Detector[] = [
   detectDuplicateRows,
   detectDuplicateNumericSequences,
+  detectRepeatedNumericColumns,
+  detectUniformNumericColumns,
   detectInvalidPercentages,
   detectInvalidPValues,
 ];
@@ -189,6 +191,104 @@ function detectInvalidPValues(table: TableDocument): DetectorResult {
   };
 }
 
+function detectRepeatedNumericColumns(table: TableDocument): DetectorResult {
+  const analyzedRows = getAnalyzedRows(table);
+  const groupedColumns = new Map<string, number[]>();
+  const findings: DetectorFinding[] = [];
+
+  for (let columnIndex = 0; columnIndex < table.columnCount; columnIndex += 1) {
+    const numericCells = analyzedRows
+      .map((row) => row.cells[columnIndex])
+      .filter((cell) => cell?.parsedNumeric);
+    if (numericCells.length < 3 || numericCells.length !== analyzedRows.length) {
+      continue;
+    }
+
+    const signature = numericCells
+      .map((cell) => cell.parsedNumeric?.normalizedText ?? "")
+      .join("\u241f");
+    const columns = groupedColumns.get(signature) ?? [];
+    columns.push(columnIndex);
+    groupedColumns.set(signature, columns);
+  }
+
+  for (const [signature, columnIndices] of groupedColumns.entries()) {
+    if (columnIndices.length < 2) {
+      continue;
+    }
+
+    findings.push({
+      message:
+        `Columns ${columnIndices.map((columnIndex) => formatColumnLabel(table, columnIndex)).join(", ")} ` +
+        `share the same numeric series across ${analyzedRows.length} data row(s): ` +
+        `${signature.replace(/\u241f/g, " | ")}.`,
+      columnIndices,
+      evidence: [signature.replace(/\u241f/g, " | ")],
+    });
+  }
+
+  return {
+    detectorId: "repeated-numeric-columns",
+    applicability: analyzedRows.length >= 3 ? "applied" : "skipped",
+    severity: findings.length ? "warning" : "info",
+    summary: findings.length
+      ? `Detected ${findings.length} repeated numeric column pattern(s).`
+      : "No repeated numeric columns detected.",
+    findings,
+  };
+}
+
+function detectUniformNumericColumns(table: TableDocument): DetectorResult {
+  const analyzedRows = getAnalyzedRows(table);
+  const findings: DetectorFinding[] = [];
+
+  for (let columnIndex = 0; columnIndex < table.columnCount; columnIndex += 1) {
+    const numericCells = analyzedRows
+      .map((row) => row.cells[columnIndex])
+      .filter((cell) => cell?.parsedNumeric);
+    if (numericCells.length < 3) {
+      continue;
+    }
+
+    const groupedValues = new Map<string, number>();
+    for (const cell of numericCells) {
+      const key = cell.parsedNumeric?.normalizedText ?? cell.normalizedText;
+      groupedValues.set(key, (groupedValues.get(key) ?? 0) + 1);
+    }
+
+    let dominantValue = "";
+    let dominantCount = 0;
+    for (const [value, count] of groupedValues.entries()) {
+      if (count > dominantCount) {
+        dominantValue = value;
+        dominantCount = count;
+      }
+    }
+
+    if (dominantCount < Math.max(3, Math.ceil(numericCells.length * 0.8))) {
+      continue;
+    }
+
+    findings.push({
+      message:
+        `Column ${formatColumnLabel(table, columnIndex)} repeats ${dominantValue} ` +
+        `in ${dominantCount}/${numericCells.length} numeric cell(s).`,
+      columnIndices: [columnIndex],
+      evidence: [dominantValue],
+    });
+  }
+
+  return {
+    detectorId: "uniform-numeric-columns",
+    applicability: analyzedRows.length >= 3 ? "applied" : "skipped",
+    severity: "info",
+    summary: findings.length
+      ? `Flagged ${findings.length} numeric column(s) with dominant repeated values.`
+      : "No dominant repeated numeric columns detected.",
+    findings,
+  };
+}
+
 function getAnalyzedRows(table: TableDocument): TableRow[] {
   return table.rows.filter((row) => row.index !== table.headerRowIndex);
 }
@@ -237,4 +337,10 @@ function groupedRowsToFindings(
 
 function formatCellRef(rowIndex: number, columnIndex: number): string {
   return `${String.fromCharCode(65 + columnIndex)}${rowIndex + 1}`;
+}
+
+function formatColumnLabel(table: TableDocument, columnIndex: number): string {
+  const columnRef = String.fromCharCode(65 + columnIndex);
+  const headerText = table.header?.[columnIndex]?.trim();
+  return headerText ? `${headerText} (${columnRef})` : columnRef;
 }

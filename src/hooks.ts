@@ -16,6 +16,7 @@ async function onStartup() {
       ...addon.api,
       runAnalyzeCurrentReader: () => void DataCheckCommandFactory.runAnalyzeCurrentReader(),
     };
+    DataCheckCommandFactory.registerReaderIntegration();
 
     await Promise.all(
       Zotero.getMainWindows().map((win) => onMainWindowLoad(win)),
@@ -67,6 +68,7 @@ async function onMainWindowUnload(_win: Window): Promise<void> {
 }
 
 function onShutdown(): void {
+  DataCheckCommandFactory.unregisterReaderIntegration();
   ztoolkit.unregisterAll();
   addon.data.dialog?.window?.close();
   addon.data.alive = false;

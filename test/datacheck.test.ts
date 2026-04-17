@@ -3,7 +3,10 @@ import { buildAuditReport } from "../src/modules/datacheck/audit";
 import { parseNumericValue, parseTableSelection } from "../src/modules/datacheck/parser";
 import type { TableSelectionDraft } from "../src/modules/datacheck/types";
 
-function createDraft(selectedText: string): TableSelectionDraft {
+function createDraft(
+  selectedText: string,
+  overrides: Partial<TableSelectionDraft> = {},
+): TableSelectionDraft {
   return {
     source: "reader-text-selection",
     attachmentID: 1,
@@ -13,6 +16,7 @@ function createDraft(selectedText: string): TableSelectionDraft {
     selectedText,
     selectedTextLength: selectedText.length,
     capturedAt: "2026-04-17T09:00:00.000Z",
+    ...overrides,
   };
 }
 
@@ -42,6 +46,29 @@ describe("datacheck parser", function () {
       comparator: undefined,
       normalizedText: "120%",
     });
+  });
+
+  it("prefers structured rows when geometry reconstruction is available", function () {
+    const table = parseTableSelection(
+      createDraft("Group Alpha 10 20 Beta 30 40", {
+        source: "reader-structured-selection",
+        structuredRows: [
+          ["Group", "Value A", "Value B"],
+          ["Alpha", "10", "20"],
+          ["Beta", "30", "40"],
+        ],
+        selectionRectCount: 6,
+        extractionDiagnostics: [
+          "Geometry extracted 3 visual row(s) from 6 selection rectangle(s).",
+        ],
+      }),
+    );
+
+    assert.equal(table.rowCount, 3);
+    assert.equal(table.columnCount, 3);
+    assert.deepEqual(table.header, ["Group", "Value A", "Value B"]);
+    assert.equal(table.selectionRectCount, 6);
+    assert.include(table.reconstructionWarnings[0], "Geometry extracted");
   });
 });
 
@@ -78,6 +105,34 @@ describe("datacheck audit", function () {
         (result) => result.detectorId === "invalid-percentages",
       )?.findings[0].message,
       "out-of-range percentage",
+    );
+  });
+
+  it("flags repeated numeric columns and dominant repeated values", function () {
+    const table = parseTableSelection(
+      createDraft(
+        [
+          "Condition\tMetric A\tMetric B\tConstant",
+          "A\t1\t1\t9",
+          "B\t2\t2\t9",
+          "C\t3\t3\t9",
+          "D\t4\t4\t9",
+        ].join("\n"),
+      ),
+    );
+    const report = buildAuditReport(table);
+
+    assert.include(
+      report.detectorResults.find(
+        (result) => result.detectorId === "repeated-numeric-columns",
+      )?.summary,
+      "Detected 1 repeated numeric column pattern",
+    );
+    assert.include(
+      report.detectorResults.find(
+        (result) => result.detectorId === "uniform-numeric-columns",
+      )?.findings[0].message,
+      "repeats 9",
     );
   });
 });
