@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- 背景圆角矩形 -->
+  <rect width="64" height="64" rx="12" fill="#E8F1F5"/>
+  
+  <!-- 统计柱状图 (模拟本福特法则的递减规律) -->
+  <rect x="12" y="24" width="6" height="32" rx="1" fill="#4A90E2"/>
+  <rect x="22" y="34" width="6" height="22" rx="1" fill="#50E3C2"/>
+  <rect x="32" y="44" width="6" height="12" rx="1" fill="#B8E986"/>
+  <rect x="42" y="50" width="6" height="6" rx="1" fill="#F8E71C"/>
+  
+  <!-- 检查/打假的放大镜 -->
+  <circle cx="38" cy="26" r="14" fill="none" stroke="#D0021B" stroke-width="4.5"/>
+  <line x1="48" y1="36" x2="58" y2="46" stroke="#D0021B" stroke-width="4.5" stroke-linecap="round"/>
+</svg>
