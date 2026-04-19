@@ -11,6 +11,47 @@ import type { AuditReport, TableDocument } from "./types";
 
 const FILE_MENU_SEPARATOR_ID = `${config.addonRef}-file-menu-separator`;
 const FILE_MENU_ITEM_ID = `${config.addonRef}-file-menu-item`;
+const SELECTION_POPUP_BUTTON_ATTRIBUTE =
+  `data-${config.addonRef}-selection-popup-action`;
+
+export function appendSelectionPopupAnalyzeButton({
+  doc,
+  append,
+  label,
+  onCommand,
+}: {
+  doc: Document;
+  append: _ZoteroTypes.Reader.ReaderAppendType["appendDOM"];
+  label: string;
+  onCommand: () => void;
+}) {
+  doc
+    .querySelectorAll<HTMLButtonElement>(
+      `button[${SELECTION_POPUP_BUTTON_ATTRIBUTE}]`,
+    )
+    .forEach((button: HTMLButtonElement) => button.remove());
+
+  const button = doc.createElement("button");
+  button.type = "button";
+  button.setAttribute(SELECTION_POPUP_BUTTON_ATTRIBUTE, "analyze-current");
+  button.textContent = label;
+  button.style.marginInlineStart = "8px";
+  button.style.padding = "4px 10px";
+  button.style.borderRadius = "999px";
+  button.style.border = "1px solid #d4b106";
+  button.style.background = "#fff7d6";
+  button.style.color = "#5b4a00";
+  button.style.fontSize = "12px";
+  button.style.cursor = "pointer";
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onCommand();
+  });
+  append(button);
+
+  return button;
+}
 
 export class DataCheckCommandFactory {
   private static readonly renderTextSelectionPopupHandler: _ZoteroTypes.Reader.EventHandler<"renderTextSelectionPopup"> = ({
@@ -20,48 +61,10 @@ export class DataCheckCommandFactory {
     reader,
   }) => {
     rememberReaderSelection(reader, params.annotation);
-
-    const button = doc.createElement("button");
-    button.type = "button";
-    button.textContent = getString("selection-popup-analyze-label");
-    button.style.marginInlineStart = "8px";
-    button.style.padding = "4px 10px";
-    button.style.borderRadius = "999px";
-    button.style.border = "1px solid #d4b106";
-    button.style.background = "#fff7d6";
-    button.style.color = "#5b4a00";
-    button.style.fontSize = "12px";
-    button.style.cursor = "pointer";
-    button.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      void DataCheckCommandFactory.runAnalyzeCurrentReader();
-    });
-    append(button);
-  };
-
-  private static readonly createReaderContextMenuHandler: _ZoteroTypes.Reader.EventHandler<"createViewContextMenu"> = ({
-    append,
-    reader,
-  }) => {
-    rememberReaderSelection(reader);
-
-    append({
-      label: getString("contextmenu-analyze-label"),
-      onCommand: () => {
-        void DataCheckCommandFactory.runAnalyzeCurrentReader();
-      },
-    });
-  };
-
-  private static readonly createSelectorContextMenuHandler: _ZoteroTypes.Reader.EventHandler<"createSelectorContextMenu"> = ({
-    append,
-    reader,
-  }) => {
-    rememberReaderSelection(reader);
-
-    append({
-      label: getString("contextmenu-analyze-label"),
+    appendSelectionPopupAnalyzeButton({
+      doc,
+      append,
+      label: getString("selection-popup-analyze-label"),
       onCommand: () => {
         void DataCheckCommandFactory.runAnalyzeCurrentReader();
       },
@@ -69,19 +72,11 @@ export class DataCheckCommandFactory {
   };
 
   static registerReaderIntegration() {
+    this.unregisterReaderIntegration();
+
     Zotero.Reader.registerEventListener(
       "renderTextSelectionPopup",
       this.renderTextSelectionPopupHandler,
-      config.addonID,
-    );
-    Zotero.Reader.registerEventListener(
-      "createViewContextMenu",
-      this.createReaderContextMenuHandler,
-      config.addonID,
-    );
-    Zotero.Reader.registerEventListener(
-      "createSelectorContextMenu",
-      this.createSelectorContextMenuHandler,
       config.addonID,
     );
   }
@@ -91,42 +86,10 @@ export class DataCheckCommandFactory {
       "renderTextSelectionPopup",
       this.renderTextSelectionPopupHandler,
     );
-    Zotero.Reader.unregisterEventListener(
-      "createViewContextMenu",
-      this.createReaderContextMenuHandler,
-    );
-    Zotero.Reader.unregisterEventListener(
-      "createSelectorContextMenu",
-      this.createSelectorContextMenuHandler,
-    );
   }
 
   static registerWindowMenu(win: Window) {
     this.unregisterWindowMenu(win);
-
-    const fileMenuPopup = win.document.querySelector(
-      "#menu_FilePopup",
-    ) as XULPopupElement | null;
-    if (!fileMenuPopup) {
-      return;
-    }
-
-    try {
-      const separator = win.document.createXULElement("menuseparator");
-      separator.id = FILE_MENU_SEPARATOR_ID;
-
-      const menuItem = win.document.createXULElement("menuitem");
-      menuItem.id = FILE_MENU_ITEM_ID;
-      menuItem.setAttribute("label", getString("menuitem-filemenulabel"));
-      menuItem.addEventListener("command", () => {
-        void this.runAnalyzeCurrentReader();
-      });
-
-      fileMenuPopup.append(separator, menuItem);
-    } catch (error) {
-      const menuError = error instanceof Error ? error : new Error(String(error));
-      Zotero.logError(menuError);
-    }
   }
 
   static unregisterWindowMenu(win: Window) {

@@ -1,5 +1,6 @@
 import { assert } from "chai";
 import { buildAuditReport } from "../src/modules/datacheck/audit";
+import { appendSelectionPopupAnalyzeButton } from "../src/modules/datacheck/commands";
 import { parseNumericValue, parseTableSelection } from "../src/modules/datacheck/parser";
 import type { TableSelectionDraft } from "../src/modules/datacheck/types";
 
@@ -134,5 +135,36 @@ describe("datacheck audit", function () {
       )?.findings[0].message,
       "repeats 9",
     );
+  });
+});
+
+describe("datacheck selection popup", function () {
+  it("keeps a single analyze button when the popup renders repeatedly", function () {
+    const doc = Zotero.getMainWindow().document.implementation.createHTMLDocument(
+      "datacheck-selection-popup",
+    );
+    const container = doc.createElement("div");
+    doc.body.append(container);
+
+    const append: _ZoteroTypes.Reader.ReaderAppendType["appendDOM"] = (
+      ...nodes
+    ) => {
+      container.append(...nodes);
+    };
+
+    appendSelectionPopupAnalyzeButton({
+      doc,
+      append,
+      label: "Analyze Selection",
+      onCommand: () => undefined,
+    });
+    appendSelectionPopupAnalyzeButton({
+      doc,
+      append,
+      label: "Analyze Selection",
+      onCommand: () => undefined,
+    });
+
+    assert.lengthOf(container.querySelectorAll("button"), 1);
   });
 });
