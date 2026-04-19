@@ -74,7 +74,9 @@ function _getString(
 ): string {
   const localStringWithPrefix = `${config.addonRef}-${localeString}`;
   const { branch, args } = options;
-  const localeStore = (globalThis as any).addon?.data?.locale?.current;
+  const localeStore =
+    (Zotero as any)[config.addonInstance]?.data?.locale?.current ??
+    addon.data.locale?.current;
   const pattern = localeStore?.formatMessagesSync([
     { id: localStringWithPrefix, args },
   ])[0] as Pattern;

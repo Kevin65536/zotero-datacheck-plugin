@@ -19,26 +19,37 @@ export async function registerPrefsScripts(_window: Window) {
           label: getString("prefs-table-detail"),
         },
       ],
-      rows: [
-        {
-          title: "Architecture",
-          detail: "Single XPI, pure TypeScript runtime",
-        },
-        {
-          title: "Phase 1",
-          detail: "Manual table region selection inside PDF reader",
-        },
-        {
-          title: "Next implementation step",
-          detail: "Selected-text table parsing and anomaly report dialog",
-        },
-      ],
+      rows: buildPreferenceRows(),
     };
   } else {
     addon.data.prefs.window = _window;
+    addon.data.prefs.rows = buildPreferenceRows();
   }
   updatePrefsUI();
   bindPrefEvents();
+}
+
+function buildPreferenceRows() {
+  return [
+    {
+      title: getString("prefs-row-architecture-title"),
+      detail: getString("prefs-row-architecture-detail"),
+    },
+    {
+      title: getString("prefs-row-phase1-title"),
+      detail: getString("prefs-row-phase1-detail"),
+    },
+    {
+      title: getString("prefs-row-next-step-title"),
+      detail: getString("prefs-row-next-step-detail"),
+    },
+  ];
+}
+
+function getPrefToggleStateLabel(enabled: boolean) {
+  return getString(
+    enabled ? "prefs-toggle-state-enabled" : "prefs-toggle-state-disabled",
+  );
 }
 
 async function updatePrefsUI() {
@@ -64,18 +75,23 @@ async function updatePrefsUI() {
       "getRowData",
       (index) =>
         addon.data.prefs?.rows[index] || {
-          title: "no data",
-          detail: "no data",
+          title: getString("prefs-row-empty-title"),
+          detail: getString("prefs-row-empty-detail"),
         },
     )
     // Show a progress window when selection changes
     .setProp("onSelectionChange", (selection) => {
+      const selectedRows =
+        addon.data.prefs?.rows
+          .filter((v, i) => selection.isSelected(i))
+          .map((row) => row.title)
+          .join(", ") || getString("prefs-row-empty-title");
+
       new ztoolkit.ProgressWindow(config.addonName)
         .createLine({
-          text: `Selected line: ${addon.data.prefs?.rows
-            .filter((v, i) => selection.isSelected(i))
-            .map((row) => row.title)
-            .join(",")}`,
+          text: getString("prefs-selection-message", {
+            args: { titles: selectedRows },
+          }),
           progress: 100,
         })
         .show();
@@ -114,7 +130,13 @@ function bindPrefEvents() {
     ?.addEventListener("command", (e: Event) => {
       ztoolkit.log(e);
       addon.data.prefs!.window.alert(
-        `DataCheck commands changed to ${(e.target as XUL.Checkbox).checked}.`,
+        getString("prefs-command-toggle-alert", {
+          args: {
+            state: getPrefToggleStateLabel(
+              (e.target as XUL.Checkbox).checked,
+            ),
+          },
+        }),
       );
     });
 
@@ -125,7 +147,9 @@ function bindPrefEvents() {
     ?.addEventListener("change", (e: Event) => {
       ztoolkit.log(e);
       addon.data.prefs!.window.alert(
-        `Default notes changed to ${(e.target as HTMLInputElement).value}.`,
+        getString("prefs-input-change-alert", {
+          args: { value: (e.target as HTMLInputElement).value },
+        }),
       );
     });
 }

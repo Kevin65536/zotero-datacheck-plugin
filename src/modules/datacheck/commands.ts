@@ -341,7 +341,7 @@ export class DataCheckCommandFactory {
         },
         false,
       )
-      .addButton("Close", "close")
+      .addButton(getString("report-dialog-close"), "close")
       .open(getString("report-dialog-title"));
 
     addon.data.dialog = dialogHelper;
