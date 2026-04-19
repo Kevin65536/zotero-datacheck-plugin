@@ -11,8 +11,7 @@ import type { AuditReport, TableDocument } from "./types";
 
 const FILE_MENU_SEPARATOR_ID = `${config.addonRef}-file-menu-separator`;
 const FILE_MENU_ITEM_ID = `${config.addonRef}-file-menu-item`;
-const SELECTION_POPUP_BUTTON_ATTRIBUTE =
-  `data-${config.addonRef}-selection-popup-action`;
+const SELECTION_POPUP_BUTTON_ATTRIBUTE = `data-${config.addonRef}-selection-popup-action`;
 
 type NumericKindKey = "number" | "percentage" | "p-value";
 
@@ -82,7 +81,9 @@ export function buildReportVisualizationModel(
   table: TableDocument,
 ): ReportVisualizationModel {
   const benfordProfile = buildBenfordProfile(table);
-  const dataRows = table.rows.filter((row) => row.index !== table.headerRowIndex);
+  const dataRows = table.rows.filter(
+    (row) => row.index !== table.headerRowIndex,
+  );
   const numericCells = dataRows.flatMap((row) => {
     return row.cells.flatMap((cell) => {
       const parsedNumeric = cell.parsedNumeric;
@@ -100,42 +101,45 @@ export function buildReportVisualizationModel(
     });
   });
 
-  const columnProfiles = Array.from({ length: table.columnCount }, (_, columnIndex) => {
-    let numberCount = 0;
-    let percentageCount = 0;
-    let pValueCount = 0;
+  const columnProfiles = Array.from(
+    { length: table.columnCount },
+    (_, columnIndex) => {
+      let numberCount = 0;
+      let percentageCount = 0;
+      let pValueCount = 0;
 
-    for (const numericCell of numericCells) {
-      if (numericCell.columnIndex !== columnIndex) {
-        continue;
+      for (const numericCell of numericCells) {
+        if (numericCell.columnIndex !== columnIndex) {
+          continue;
+        }
+
+        switch (numericCell.kind) {
+          case "number":
+            numberCount += 1;
+            break;
+          case "percentage":
+            percentageCount += 1;
+            break;
+          case "p-value":
+            pValueCount += 1;
+            break;
+        }
       }
 
-      switch (numericCell.kind) {
-        case "number":
-          numberCount += 1;
-          break;
-        case "percentage":
-          percentageCount += 1;
-          break;
-        case "p-value":
-          pValueCount += 1;
-          break;
+      const total = numberCount + percentageCount + pValueCount;
+      if (!total) {
+        return undefined;
       }
-    }
 
-    const total = numberCount + percentageCount + pValueCount;
-    if (!total) {
-      return undefined;
-    }
-
-    return {
-      label: formatColumnLabel(table, columnIndex),
-      total,
-      numberCount,
-      percentageCount,
-      pValueCount,
-    };
-  }).filter((profile): profile is NumericColumnProfile => Boolean(profile));
+      return {
+        label: formatColumnLabel(table, columnIndex),
+        total,
+        numberCount,
+        percentageCount,
+        pValueCount,
+      };
+    },
+  ).filter((profile): profile is NumericColumnProfile => Boolean(profile));
 
   return {
     firstDigitBins: benfordProfile.bins.map((bin) => ({
@@ -154,22 +158,18 @@ export function buildReportVisualizationModel(
 }
 
 export class DataCheckCommandFactory {
-  private static readonly renderTextSelectionPopupHandler: _ZoteroTypes.Reader.EventHandler<"renderTextSelectionPopup"> = ({
-    doc,
-    append,
-    params,
-    reader,
-  }) => {
-    rememberReaderSelection(reader, params.annotation);
-    appendSelectionPopupAnalyzeButton({
-      doc,
-      append,
-      label: getString("selection-popup-analyze-label"),
-      onCommand: () => {
-        void DataCheckCommandFactory.runAnalyzeCurrentReader();
-      },
-    });
-  };
+  private static readonly renderTextSelectionPopupHandler: _ZoteroTypes.Reader.EventHandler<"renderTextSelectionPopup"> =
+    ({ doc, append, params, reader }) => {
+      rememberReaderSelection(reader, params.annotation);
+      appendSelectionPopupAnalyzeButton({
+        doc,
+        append,
+        label: getString("selection-popup-analyze-label"),
+        onCommand: () => {
+          void DataCheckCommandFactory.runAnalyzeCurrentReader();
+        },
+      });
+    };
 
   static registerReaderIntegration() {
     this.unregisterReaderIntegration();
@@ -241,10 +241,13 @@ export class DataCheckCommandFactory {
       addon.data.dataCheck.lastTableDocument = table;
       addon.data.dataCheck.lastAuditReport = report;
 
-      const popupWin = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
-        closeOnClick: true,
-        closeTime: -1,
-      })
+      const popupWin = new ztoolkit.ProgressWindow(
+        addon.data.config.addonName,
+        {
+          closeOnClick: true,
+          closeTime: -1,
+        },
+      )
         .createLine({
           text: getString("command-analysis-complete"),
           type: "success",
@@ -292,10 +295,13 @@ export class DataCheckCommandFactory {
         error instanceof Error ? error : new Error(String(error));
       Zotero.logError(analysisError);
 
-      const popupWin = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
-        closeOnClick: true,
-        closeTime: -1,
-      })
+      const popupWin = new ztoolkit.ProgressWindow(
+        addon.data.config.addonName,
+        {
+          closeOnClick: true,
+          closeTime: -1,
+        },
+      )
         .createLine({
           text: getString("command-analysis-error"),
           type: "default",
@@ -310,7 +316,10 @@ export class DataCheckCommandFactory {
     }
   }
 
-  private static showAuditReportDialog(table: TableDocument, report: AuditReport) {
+  private static showAuditReportDialog(
+    table: TableDocument,
+    report: AuditReport,
+  ) {
     addon.data.dialog?.window?.close();
 
     const dialogHelper = new ztoolkit.Dialog(1, 1)
@@ -358,13 +367,17 @@ export class DataCheckCommandFactory {
         : getString("report-source-text");
     const detectorMarkup = report.detectorResults
       .map((detectorResult) => {
-        const toneClass = detectorResult.severity === "warning"
-          ? "dc-detector-warning"
-          : "dc-detector-info";
+        const toneClass =
+          detectorResult.severity === "warning"
+            ? "dc-detector-warning"
+            : "dc-detector-info";
         const findingPreview = detectorResult.findings.length
           ? `<div class="dc-preview-list">${detectorResult.findings
               .slice(0, 3)
-              .map((finding) => `<div class="dc-preview-item">${escapeHtml(finding.message)}</div>`)
+              .map(
+                (finding) =>
+                  `<div class="dc-preview-item">${escapeHtml(finding.message)}</div>`,
+              )
               .join("")}</div>`
           : "";
         return `<article class="dc-detector-card ${toneClass}">
@@ -382,23 +395,30 @@ export class DataCheckCommandFactory {
         </article>`;
       })
       .join("");
-    const flattenedFindings = report.detectorResults.flatMap((detectorResult) => {
-      return detectorResult.findings.map((finding) => ({
-        detectorId: detectorResult.detectorId,
-        message: finding.message,
-      }));
-    });
+    const flattenedFindings = report.detectorResults.flatMap(
+      (detectorResult) => {
+        return detectorResult.findings.map((finding) => ({
+          detectorId: detectorResult.detectorId,
+          message: finding.message,
+        }));
+      },
+    );
     const findingsMarkup = flattenedFindings.length
       ? flattenedFindings
-          .map((finding) => `<div class="dc-finding-card">
+          .map(
+            (finding) => `<div class="dc-finding-card">
             <div class="dc-finding-label">${escapeHtml(getDetectorTitle(finding.detectorId))}</div>
             <div class="dc-finding-message">${escapeHtml(finding.message)}</div>
-          </div>`)
+          </div>`,
+          )
           .join("")
       : `<div class="dc-empty-state">${escapeHtml(getString("report-empty-findings"))}</div>`;
     const diagnosticsMarkup = report.tableDiagnostics.length
       ? report.tableDiagnostics
-          .map((diagnostic) => `<div class="dc-diagnostic-card">${escapeHtml(diagnostic)}</div>`)
+          .map(
+            (diagnostic) =>
+              `<div class="dc-diagnostic-card">${escapeHtml(diagnostic)}</div>`,
+          )
           .join("")
       : `<div class="dc-empty-state">${escapeHtml(getString("report-empty-diagnostics"))}</div>`;
 
@@ -461,7 +481,8 @@ export class DataCheckCommandFactory {
   ): string {
     const chartMarkup = visualizationModel.firstDigitSampleCount
       ? visualizationModel.firstDigitBins
-          .map((bin) => `<div class="dc-chart-row">
+          .map(
+            (bin) => `<div class="dc-chart-row">
             <div class="dc-chart-row-head">
               <span class="dc-chart-label">${bin.digit}</span>
               <span class="dc-chart-value">${formatPercentage(bin.observedRatio)}</span>
@@ -471,7 +492,8 @@ export class DataCheckCommandFactory {
               <div class="dc-chart-bar" style="width:${toTrackWidth(bin.observedRatio)}"></div>
             </div>
             <div class="dc-chart-caption">${escapeHtml(getString("report-visual-legend-expected"))} ${formatPercentage(bin.expectedRatio)} · ${bin.observedCount}</div>
-          </div>`)
+          </div>`,
+          )
           .join("")
       : `<div class="dc-empty-state">${escapeHtml(getString("report-visual-leading-digits-empty"))}</div>`;
 
@@ -1035,7 +1057,7 @@ export class DataCheckCommandFactory {
   }
 }
 
-function getLeadingDigit(value: number): number | undefined {
+function _getLeadingDigit(_value: number): number | undefined {
   return undefined;
 }
 
@@ -1106,6 +1128,6 @@ function escapeHtml(value: string): string {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/\"/g, "&quot;")
+    .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }

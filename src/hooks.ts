@@ -14,7 +14,8 @@ async function onStartup() {
     initLocale();
     addon.api = {
       ...addon.api,
-      runAnalyzeCurrentReader: () => void DataCheckCommandFactory.runAnalyzeCurrentReader(),
+      runAnalyzeCurrentReader: () =>
+        void DataCheckCommandFactory.runAnalyzeCurrentReader(),
     };
     DataCheckCommandFactory.registerReaderIntegration();
 

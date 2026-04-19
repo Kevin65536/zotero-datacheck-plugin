@@ -24,15 +24,7 @@ export interface BenfordProfile {
 type Detector = (table: TableDocument) => DetectorResult;
 
 const BENFORD_EXPECTED_RATIOS = [
-  0.301,
-  0.176,
-  0.125,
-  0.097,
-  0.079,
-  0.067,
-  0.058,
-  0.051,
-  0.046,
+  0.301, 0.176, 0.125, 0.097, 0.079, 0.067, 0.058, 0.051, 0.046,
 ];
 const BENFORD_MIN_SAMPLE_COUNT = 20;
 const BENFORD_WARNING_MAD_THRESHOLD = 0.015;
@@ -89,7 +81,10 @@ export function buildBenfordProfile(table: TableDocument): BenfordProfile {
     }
   }
 
-  const sampleCount = firstDigitCounts.reduce((count, value) => count + value, 0);
+  const sampleCount = firstDigitCounts.reduce(
+    (count, value) => count + value,
+    0,
+  );
   const bins = BENFORD_EXPECTED_RATIOS.map((expectedRatio, index) => {
     const observedCount = firstDigitCounts[index];
     const observedRatio = sampleCount ? observedCount / sampleCount : 0;
@@ -140,9 +135,7 @@ export function formatAuditReport(
 
   lines.push("", "Detectors:");
   for (const detectorResult of report.detectorResults) {
-    lines.push(
-      `- ${detectorResult.detectorId}: ${detectorResult.summary}`,
-    );
+    lines.push(`- ${detectorResult.detectorId}: ${detectorResult.summary}`);
     for (const finding of detectorResult.findings) {
       lines.push(`  * ${finding.message}`);
     }
@@ -369,7 +362,10 @@ function detectRepeatedNumericColumns(table: TableDocument): DetectorResult {
     const numericCells = analyzedRows
       .map((row) => row.cells[columnIndex])
       .filter((cell) => cell?.parsedNumeric);
-    if (numericCells.length < 3 || numericCells.length !== analyzedRows.length) {
+    if (
+      numericCells.length < 3 ||
+      numericCells.length !== analyzedRows.length
+    ) {
       continue;
     }
 

@@ -71,7 +71,9 @@ export async function getActiveReaderContext(): Promise<ReaderAuditContext | nul
     return null;
   }
 
-  const attachment = (await Zotero.Items.getAsync(reader.itemID)) as Zotero.Item;
+  const attachment = (await Zotero.Items.getAsync(
+    reader.itemID,
+  )) as Zotero.Item;
   const parentItem = attachment.parentID
     ? ((await Zotero.Items.getAsync(attachment.parentID)) as Zotero.Item)
     : undefined;
@@ -89,7 +91,8 @@ export async function getActiveReaderContext(): Promise<ReaderAuditContext | nul
   );
   if (
     !liveSelectionAnnotation &&
-    (rememberedSelection?.annotation || rememberedSelection?.selectedText.trim())
+    (rememberedSelection?.annotation ||
+      rememberedSelection?.selectedText.trim())
   ) {
     structuredSelection.diagnostics.unshift(
       getString("reader-diagnostic-preserved-selection"),
@@ -101,7 +104,9 @@ export async function getActiveReaderContext(): Promise<ReaderAuditContext | nul
     selectedText = rememberedSelection.selectedText;
   }
   if (structuredSelection.rows.length) {
-    selectedText = structuredSelection.rows.map((row) => row.join("\t")).join("\n");
+    selectedText = structuredSelection.rows
+      .map((row) => row.join("\t"))
+      .join("\n");
   }
 
   const currentPageNumber = Number(
@@ -153,7 +158,8 @@ export function createTableSelectionDraft(
 function getSelectionAnnotation(
   reader: any,
 ): SelectionAnnotationSnapshot | undefined {
-  const annotation = reader?._internalReader?._lastView?._selectionPopup?.annotation;
+  const annotation =
+    reader?._internalReader?._lastView?._selectionPopup?.annotation;
   return snapshotSelectionAnnotation(annotation);
 }
 
@@ -184,7 +190,8 @@ function getSelectedText(
   reader: any,
   selectionAnnotation?: SelectionAnnotationSnapshot,
 ): string {
-  const domSelectionText = reader?._iframeWindow?.getSelection?.()?.toString?.() ?? "";
+  const domSelectionText =
+    reader?._iframeWindow?.getSelection?.()?.toString?.() ?? "";
   if (domSelectionText.trim()) {
     return domSelectionText;
   }
@@ -238,7 +245,10 @@ async function extractStructuredSelection(
     };
   }
 
-  const viewportTransform = snapshotNumericTuple(pageView.viewport.transform, 6);
+  const viewportTransform = snapshotNumericTuple(
+    pageView.viewport.transform,
+    6,
+  );
   if (!viewportTransform) {
     diagnostics.push(getString("reader-diagnostic-viewport-unavailable"));
     return {
@@ -349,10 +359,13 @@ function inferStructuredRows(
     return [];
   }
 
-  const templateRow = rowCells.find((cells) => cells.length === columnCount) ?? rowCells[0];
+  const templateRow =
+    rowCells.find((cells) => cells.length === columnCount) ?? rowCells[0];
   const anchors = templateRow.map((cell) => cell.centerX);
 
-  return rowCells.map((cells) => alignCellsToAnchors(cells, anchors, columnCount));
+  return rowCells.map((cells) =>
+    alignCellsToAnchors(cells, anchors, columnCount),
+  );
 }
 
 function buildRowBands(selectionRects: LocalRect[]): LocalRect[] {
@@ -365,7 +378,10 @@ function buildRowBands(selectionRects: LocalRect[]): LocalRect[] {
 
   for (const rect of sortedRects) {
     const lastBand = rowBands.at(-1);
-    if (!lastBand || Math.abs(rectCenterY(rect) - rectCenterY(lastBand)) > tolerance) {
+    if (
+      !lastBand ||
+      Math.abs(rectCenterY(rect) - rectCenterY(lastBand)) > tolerance
+    ) {
       rowBands.push({ ...rect });
       continue;
     }
@@ -379,7 +395,9 @@ function buildRowBands(selectionRects: LocalRect[]): LocalRect[] {
   return rowBands;
 }
 
-function buildCellsFromEntries(entries: SelectionTextEntry[]): StructuredCell[] {
+function buildCellsFromEntries(
+  entries: SelectionTextEntry[],
+): StructuredCell[] {
   if (!entries.length) {
     return [];
   }
@@ -405,7 +423,9 @@ function buildCellsFromEntries(entries: SelectionTextEntry[]): StructuredCell[] 
     lastCell.right = Math.max(lastCell.right, entry.right);
     lastCell.bottom = Math.max(lastCell.bottom, entry.bottom);
     lastCell.top = Math.min(lastCell.top, entry.top);
-    lastCell.text = `${lastCell.text} ${entry.text}`.replace(/\s+/g, " ").trim();
+    lastCell.text = `${lastCell.text} ${entry.text}`
+      .replace(/\s+/g, " ")
+      .trim();
     lastCell.centerX = (lastCell.left + lastCell.right) / 2;
   }
 

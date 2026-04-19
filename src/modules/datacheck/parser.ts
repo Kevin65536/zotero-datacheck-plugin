@@ -31,9 +31,7 @@ const DELIMITER_CANDIDATES: DelimiterCandidate[] = [
   },
 ];
 
-export function parseTableSelection(
-  draft: TableSelectionDraft,
-): TableDocument {
+export function parseTableSelection(draft: TableSelectionDraft): TableDocument {
   const structuredRows = normalizeStructuredRows(draft.structuredRows);
   if (structuredRows.length) {
     const rawText = structuredRows.map((row) => row.join("\t")).join("\n");
@@ -51,7 +49,9 @@ export function parseTableSelection(
     .split("\n")
     .map((line) => line.replace(/\u00a0/g, " ").trim())
     .filter(Boolean);
-  const reconstructionWarnings: string[] = [...(draft.extractionDiagnostics ?? [])];
+  const reconstructionWarnings: string[] = [
+    ...(draft.extractionDiagnostics ?? []),
+  ];
 
   if (lines.length < 2) {
     reconstructionWarnings.push(getString("parser-warning-too-few-lines"));
@@ -107,7 +107,9 @@ function buildTableDocumentFromRows(
 
   const headerRowIndex = inferHeaderRowIndex(normalizedRows);
   const header =
-    headerRowIndex === undefined ? undefined : [...normalizedRows[headerRowIndex]];
+    headerRowIndex === undefined
+      ? undefined
+      : [...normalizedRows[headerRowIndex]];
 
   const rows = normalizedRows.map<TableRow>((row, rowIndex) => ({
     index: rowIndex,
@@ -123,9 +125,11 @@ function buildTableDocumentFromRows(
     }),
   }));
 
-  const numericCellCount = rows.flatMap((row) => row.cells).filter((cell) => {
-    return cell.parsedNumeric !== undefined;
-  }).length;
+  const numericCellCount = rows
+    .flatMap((row) => row.cells)
+    .filter((cell) => {
+      return cell.parsedNumeric !== undefined;
+    }).length;
 
   return {
     source: draft.source,
@@ -159,10 +163,7 @@ function normalizeStructuredRows(rows: string[][] | undefined): string[][] {
 export function parseNumericValue(
   rawText: string,
 ): ParsedNumericValue | undefined {
-  const normalized = rawText
-    .trim()
-    .replace(/[−–]/g, "-")
-    .replace(/\s+/g, " ");
+  const normalized = rawText.trim().replace(/[−–]/g, "-").replace(/\s+/g, " ");
   if (!normalized) {
     return undefined;
   }
@@ -250,9 +251,15 @@ function inferHeaderRowIndex(rows: string[][]): number | undefined {
   }
 
   const [firstRow, secondRow] = rows;
-  const firstNumericCount = firstRow.filter((cell) => parseNumericValue(cell)).length;
-  const secondNumericCount = secondRow.filter((cell) => parseNumericValue(cell)).length;
-  const firstHasLabels = firstRow.some((cell) => /[A-Za-z\u4e00-\u9fff]/.test(cell));
+  const firstNumericCount = firstRow.filter((cell) =>
+    parseNumericValue(cell),
+  ).length;
+  const secondNumericCount = secondRow.filter((cell) =>
+    parseNumericValue(cell),
+  ).length;
+  const firstHasLabels = firstRow.some((cell) =>
+    /[A-Za-z\u4e00-\u9fff]/.test(cell),
+  );
 
   if (firstHasLabels && secondNumericCount >= firstNumericCount) {
     return 0;
