@@ -1,4 +1,5 @@
 import type { ReaderAuditContext, TableSelectionDraft } from "./types";
+import { getString } from "../../utils/locale";
 
 interface LocalRect {
   left: number;
@@ -91,7 +92,7 @@ export async function getActiveReaderContext(): Promise<ReaderAuditContext | nul
     (rememberedSelection?.annotation || rememberedSelection?.selectedText.trim())
   ) {
     structuredSelection.diagnostics.unshift(
-      "Used the preserved reader selection because the live selection was cleared when the command opened.",
+      getString("reader-diagnostic-preserved-selection"),
     );
   }
 
@@ -217,9 +218,7 @@ async function extractStructuredSelection(
     reader?._iframeWindow?.PDFViewerApplication?.pdfViewer;
   const pageView = pdfViewer?.getPageView?.(annotation.position.pageIndex);
   if (!pageView?.div || !pageView.viewport) {
-    diagnostics.push(
-      "Selection geometry is available, but the current PDF page view is not ready.",
-    );
+    diagnostics.push(getString("reader-diagnostic-page-view-unavailable"));
     return {
       rows: [],
       diagnostics,
@@ -231,9 +230,7 @@ async function extractStructuredSelection(
     pageView.textLayer?.div ??
     (pageView.div.querySelector(".textLayer") as HTMLDivElement | null);
   if (!textLayerDiv) {
-    diagnostics.push(
-      "Selection geometry is available, but the PDF text layer is not available.",
-    );
+    diagnostics.push(getString("reader-diagnostic-text-layer-unavailable"));
     return {
       rows: [],
       diagnostics,
@@ -243,9 +240,7 @@ async function extractStructuredSelection(
 
   const viewportTransform = snapshotNumericTuple(pageView.viewport.transform, 6);
   if (!viewportTransform) {
-    diagnostics.push(
-      "Selection geometry is available, but the PDF viewport transform is not available.",
-    );
+    diagnostics.push(getString("reader-diagnostic-viewport-unavailable"));
     return {
       rows: [],
       diagnostics,
@@ -286,9 +281,7 @@ async function extractStructuredSelection(
     .filter((entry): entry is SelectionTextEntry => Boolean(entry));
 
   if (!selectionEntries.length) {
-    diagnostics.push(
-      "Selection geometry is available, but no matching text-layer spans were found.",
-    );
+    diagnostics.push(getString("reader-diagnostic-no-text-spans"));
     return {
       rows: [],
       diagnostics,
@@ -298,9 +291,7 @@ async function extractStructuredSelection(
 
   const structuredRows = inferStructuredRows(selectionRects, selectionEntries);
   if (!structuredRows.length) {
-    diagnostics.push(
-      "Selection geometry did not produce a stable row/column grid, so DataCheck fell back to plain-text parsing.",
-    );
+    diagnostics.push(getString("reader-diagnostic-grid-fallback"));
     return {
       rows: [],
       diagnostics,
@@ -309,10 +300,19 @@ async function extractStructuredSelection(
   }
 
   diagnostics.push(
-    `Geometry extracted ${structuredRows.length} visual row(s) from ${rects.length} selection rectangle(s).`,
+    getString("reader-diagnostic-geometry-rows", {
+      args: {
+        rows: structuredRows.length,
+        rects: rects.length,
+      },
+    }),
   );
   diagnostics.push(
-    `Structured extraction reconstructed up to ${Math.max(...structuredRows.map((row) => row.length))} column(s) from the PDF text layer.`,
+    getString("reader-diagnostic-geometry-columns", {
+      args: {
+        cols: Math.max(...structuredRows.map((row) => row.length)),
+      },
+    }),
   );
 
   return {

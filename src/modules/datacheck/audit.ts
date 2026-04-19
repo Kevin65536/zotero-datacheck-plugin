@@ -5,12 +5,42 @@ import type {
   TableDocument,
   TableRow,
 } from "./types";
+import { getString } from "../../utils/locale";
+
+export interface BenfordDigitBin {
+  digit: number;
+  observedCount: number;
+  observedRatio: number;
+  expectedRatio: number;
+  absoluteDeviation: number;
+}
+
+export interface BenfordProfile {
+  sampleCount: number;
+  mad: number;
+  bins: BenfordDigitBin[];
+}
 
 type Detector = (table: TableDocument) => DetectorResult;
+
+const BENFORD_EXPECTED_RATIOS = [
+  0.301,
+  0.176,
+  0.125,
+  0.097,
+  0.079,
+  0.067,
+  0.058,
+  0.051,
+  0.046,
+];
+const BENFORD_MIN_SAMPLE_COUNT = 20;
+const BENFORD_WARNING_MAD_THRESHOLD = 0.015;
 
 const DETECTORS: Detector[] = [
   detectDuplicateRows,
   detectDuplicateNumericSequences,
+  detectBenfordDeviation,
   detectRepeatedNumericColumns,
   detectUniformNumericColumns,
   detectInvalidPercentages,
@@ -26,13 +56,58 @@ export function buildAuditReport(table: TableDocument): AuditReport {
 
   return {
     createdAt: new Date().toISOString(),
-    summary:
-      `Parsed ${table.rowCount} rows x ${table.columnCount} columns ` +
-      `(${analyzedRowCount} data rows, ${table.numericCellCount} numeric cells) ` +
-      `and produced ${findingCount} finding(s).`,
+    summary: getString("audit-summary", {
+      args: {
+        rows: table.rowCount,
+        cols: table.columnCount,
+        dataRows: analyzedRowCount,
+        numericCells: table.numericCellCount,
+        findings: findingCount,
+      },
+    }),
     tableDiagnostics: [...table.reconstructionWarnings],
     detectorResults,
     findingCount,
+  };
+}
+
+export function buildBenfordProfile(table: TableDocument): BenfordProfile {
+  const firstDigitCounts = Array.from({ length: 9 }, () => 0);
+
+  for (const row of getAnalyzedRows(table)) {
+    for (const cell of row.cells) {
+      if (cell.parsedNumeric?.kind !== "number") {
+        continue;
+      }
+
+      const leadingDigit = getLeadingDigit(cell.parsedNumeric.value);
+      if (!leadingDigit) {
+        continue;
+      }
+
+      firstDigitCounts[leadingDigit - 1] += 1;
+    }
+  }
+
+  const sampleCount = firstDigitCounts.reduce((count, value) => count + value, 0);
+  const bins = BENFORD_EXPECTED_RATIOS.map((expectedRatio, index) => {
+    const observedCount = firstDigitCounts[index];
+    const observedRatio = sampleCount ? observedCount / sampleCount : 0;
+    return {
+      digit: index + 1,
+      observedCount,
+      observedRatio,
+      expectedRatio,
+      absoluteDeviation: Math.abs(observedRatio - expectedRatio),
+    };
+  });
+
+  return {
+    sampleCount,
+    mad: sampleCount
+      ? bins.reduce((sum, bin) => sum + bin.absoluteDeviation, 0) / bins.length
+      : 0,
+    bins,
   };
 }
 
@@ -84,18 +159,26 @@ function detectDuplicateRows(table: TableDocument): DetectorResult {
   const groupedRows = groupRowsBySignature(getAnalyzedRows(table), (row) => {
     return row.cells.map((cell) => cell.normalizedText).join("\u241f");
   });
-  const findings = groupedRowsToFindings(
-    groupedRows,
-    "Detected rows with identical cell text.",
-  );
+  const findings = groupedRowsToFindings(groupedRows, (rows, signature) => ({
+    message: getString("audit-detector-duplicate-rows-finding", {
+      args: {
+        rows: rows.map((row) => row.index + 1).join(", "),
+        signature,
+      },
+    }),
+    rowIndices: rows.map((row) => row.index),
+    evidence: [signature],
+  }));
 
   return {
     detectorId: "duplicate-rows",
     applicability: getAnalyzedRows(table).length >= 2 ? "applied" : "skipped",
     severity: findings.length ? "warning" : "info",
     summary: findings.length
-      ? `Detected ${findings.length} repeated row pattern(s).`
-      : "No repeated rows detected.",
+      ? getString("audit-detector-duplicate-rows-summary-hit", {
+          args: { count: findings.length },
+        })
+      : getString("audit-detector-duplicate-rows-summary-clear"),
     findings,
   };
 }
@@ -111,18 +194,94 @@ function detectDuplicateNumericSequences(table: TableDocument): DetectorResult {
     }
     return numericSequence.join("\u241f");
   });
-  const findings = groupedRowsToFindings(
-    groupedRows,
-    "Detected duplicated numeric sequences across rows.",
-  );
+  const findings = groupedRowsToFindings(groupedRows, (rows, signature) => ({
+    message: getString("audit-detector-duplicate-numeric-finding", {
+      args: {
+        rows: rows.map((row) => row.index + 1).join(", "),
+        signature,
+      },
+    }),
+    rowIndices: rows.map((row) => row.index),
+    evidence: [signature],
+  }));
 
   return {
     detectorId: "duplicate-numeric-sequences",
     applicability: getAnalyzedRows(table).length >= 2 ? "applied" : "skipped",
     severity: findings.length ? "warning" : "info",
     summary: findings.length
-      ? `Detected ${findings.length} repeated numeric sequence(s).`
-      : "No repeated numeric sequences detected.",
+      ? getString("audit-detector-duplicate-numeric-summary-hit", {
+          args: { count: findings.length },
+        })
+      : getString("audit-detector-duplicate-numeric-summary-clear"),
+    findings,
+  };
+}
+
+function detectBenfordDeviation(table: TableDocument): DetectorResult {
+  const profile = buildBenfordProfile(table);
+  if (profile.sampleCount < BENFORD_MIN_SAMPLE_COUNT) {
+    return {
+      detectorId: "benford-deviation",
+      applicability: "skipped",
+      severity: "info",
+      summary: getString("audit-detector-benford-summary-skip", {
+        args: {
+          count: profile.sampleCount,
+          minimum: BENFORD_MIN_SAMPLE_COUNT,
+        },
+      }),
+      findings: [],
+    };
+  }
+
+  const dominantDigits = [...profile.bins]
+    .sort((left, right) => right.absoluteDeviation - left.absoluteDeviation)
+    .slice(0, 3)
+    .map((bin) => {
+      return getString("audit-detector-benford-digit-detail", {
+        args: {
+          digit: bin.digit,
+          observed: formatRatio(bin.observedRatio),
+          expected: formatRatio(bin.expectedRatio),
+        },
+      });
+    })
+    .join("; ");
+
+  const findings: DetectorFinding[] =
+    profile.mad >= BENFORD_WARNING_MAD_THRESHOLD
+      ? [
+          {
+            message: getString("audit-detector-benford-finding", {
+              args: {
+                digits: dominantDigits,
+                mad: formatMad(profile.mad),
+                count: profile.sampleCount,
+              },
+            }),
+            evidence: dominantDigits ? [dominantDigits] : undefined,
+          },
+        ]
+      : [];
+
+  return {
+    detectorId: "benford-deviation",
+    applicability: "applied",
+    severity: findings.length ? "warning" : "info",
+    summary: findings.length
+      ? getString("audit-detector-benford-summary-hit", {
+          args: {
+            mad: formatMad(profile.mad),
+            count: profile.sampleCount,
+          },
+        })
+      : getString("audit-detector-benford-summary-clear", {
+          args: {
+            mad: formatMad(profile.mad),
+            count: profile.sampleCount,
+          },
+        }),
     findings,
   };
 }
@@ -137,9 +296,12 @@ function detectInvalidPercentages(table: TableDocument): DetectorResult {
       }
       if (cell.parsedNumeric.value < 0 || cell.parsedNumeric.value > 100) {
         findings.push({
-          message:
-            `Cell ${formatCellRef(row.index, cell.columnIndex)} has ` +
-            `out-of-range percentage ${cell.rawText}.`,
+          message: getString("audit-detector-invalid-percentages-finding", {
+            args: {
+              cell: formatCellRef(row.index, cell.columnIndex),
+              value: cell.rawText,
+            },
+          }),
           rowIndices: [row.index],
           columnIndices: [cell.columnIndex],
           cellRefs: [formatCellRef(row.index, cell.columnIndex)],
@@ -153,8 +315,10 @@ function detectInvalidPercentages(table: TableDocument): DetectorResult {
     applicability: "applied",
     severity: findings.length ? "warning" : "info",
     summary: findings.length
-      ? `Detected ${findings.length} out-of-range percentage value(s).`
-      : "No out-of-range percentage values detected.",
+      ? getString("audit-detector-invalid-percentages-summary-hit", {
+          args: { count: findings.length },
+        })
+      : getString("audit-detector-invalid-percentages-summary-clear"),
     findings,
   };
 }
@@ -169,9 +333,12 @@ function detectInvalidPValues(table: TableDocument): DetectorResult {
       }
       if (cell.parsedNumeric.value < 0 || cell.parsedNumeric.value > 1) {
         findings.push({
-          message:
-            `Cell ${formatCellRef(row.index, cell.columnIndex)} has ` +
-            `out-of-range p-value ${cell.rawText}.`,
+          message: getString("audit-detector-invalid-pvalues-finding", {
+            args: {
+              cell: formatCellRef(row.index, cell.columnIndex),
+              value: cell.rawText,
+            },
+          }),
           rowIndices: [row.index],
           columnIndices: [cell.columnIndex],
           cellRefs: [formatCellRef(row.index, cell.columnIndex)],
@@ -185,8 +352,10 @@ function detectInvalidPValues(table: TableDocument): DetectorResult {
     applicability: "applied",
     severity: findings.length ? "warning" : "info",
     summary: findings.length
-      ? `Detected ${findings.length} out-of-range p-value(s).`
-      : "No out-of-range p-values detected.",
+      ? getString("audit-detector-invalid-pvalues-summary-hit", {
+          args: { count: findings.length },
+        })
+      : getString("audit-detector-invalid-pvalues-summary-clear"),
     findings,
   };
 }
@@ -218,10 +387,15 @@ function detectRepeatedNumericColumns(table: TableDocument): DetectorResult {
     }
 
     findings.push({
-      message:
-        `Columns ${columnIndices.map((columnIndex) => formatColumnLabel(table, columnIndex)).join(", ")} ` +
-        `share the same numeric series across ${analyzedRows.length} data row(s): ` +
-        `${signature.replace(/\u241f/g, " | ")}.`,
+      message: getString("audit-detector-repeated-columns-finding", {
+        args: {
+          columns: columnIndices
+            .map((columnIndex) => formatColumnLabel(table, columnIndex))
+            .join(", "),
+          rows: analyzedRows.length,
+          signature: signature.replace(/\u241f/g, " | "),
+        },
+      }),
       columnIndices,
       evidence: [signature.replace(/\u241f/g, " | ")],
     });
@@ -232,8 +406,10 @@ function detectRepeatedNumericColumns(table: TableDocument): DetectorResult {
     applicability: analyzedRows.length >= 3 ? "applied" : "skipped",
     severity: findings.length ? "warning" : "info",
     summary: findings.length
-      ? `Detected ${findings.length} repeated numeric column pattern(s).`
-      : "No repeated numeric columns detected.",
+      ? getString("audit-detector-repeated-columns-summary-hit", {
+          args: { count: findings.length },
+        })
+      : getString("audit-detector-repeated-columns-summary-clear"),
     findings,
   };
 }
@@ -270,9 +446,14 @@ function detectUniformNumericColumns(table: TableDocument): DetectorResult {
     }
 
     findings.push({
-      message:
-        `Column ${formatColumnLabel(table, columnIndex)} repeats ${dominantValue} ` +
-        `in ${dominantCount}/${numericCells.length} numeric cell(s).`,
+      message: getString("audit-detector-uniform-columns-finding", {
+        args: {
+          column: formatColumnLabel(table, columnIndex),
+          value: dominantValue,
+          count: dominantCount,
+          total: numericCells.length,
+        },
+      }),
       columnIndices: [columnIndex],
       evidence: [dominantValue],
     });
@@ -283,8 +464,10 @@ function detectUniformNumericColumns(table: TableDocument): DetectorResult {
     applicability: analyzedRows.length >= 3 ? "applied" : "skipped",
     severity: "info",
     summary: findings.length
-      ? `Flagged ${findings.length} numeric column(s) with dominant repeated values.`
-      : "No dominant repeated numeric columns detected.",
+      ? getString("audit-detector-uniform-columns-summary-hit", {
+          args: { count: findings.length },
+        })
+      : getString("audit-detector-uniform-columns-summary-clear"),
     findings,
   };
 }
@@ -315,7 +498,7 @@ function groupRowsBySignature(
 
 function groupedRowsToFindings(
   groupedRows: Map<string, TableRow[]>,
-  prefix: string,
+  buildFinding: (rows: TableRow[], signature: string) => DetectorFinding,
 ): DetectorFinding[] {
   const findings: DetectorFinding[] = [];
 
@@ -323,16 +506,28 @@ function groupedRowsToFindings(
     if (rows.length < 2) {
       continue;
     }
-    findings.push({
-      message:
-        `${prefix} Rows ${rows.map((row) => row.index + 1).join(", ")} share ` +
-        `the signature ${signature.replace(/\u241f/g, " | ")}.`,
-      rowIndices: rows.map((row) => row.index),
-      evidence: [signature.replace(/\u241f/g, " | ")],
-    });
+    findings.push(buildFinding(rows, signature.replace(/\u241f/g, " | ")));
   }
 
   return findings;
+}
+
+function getLeadingDigit(value: number): number | undefined {
+  const absoluteValue = Math.abs(value);
+  if (!Number.isFinite(absoluteValue) || absoluteValue === 0) {
+    return undefined;
+  }
+
+  const match = absoluteValue.toExponential().match(/^([1-9])/);
+  return match ? Number(match[1]) : undefined;
+}
+
+function formatRatio(ratio: number): string {
+  return `${(ratio * 100).toFixed(1)}%`;
+}
+
+function formatMad(mad: number): string {
+  return mad.toFixed(3);
 }
 
 function formatCellRef(rowIndex: number, columnIndex: number): string {

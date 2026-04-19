@@ -1,6 +1,9 @@
 import { assert } from "chai";
 import { buildAuditReport } from "../src/modules/datacheck/audit";
-import { appendSelectionPopupAnalyzeButton } from "../src/modules/datacheck/commands";
+import {
+  appendSelectionPopupAnalyzeButton,
+  buildReportVisualizationModel,
+} from "../src/modules/datacheck/commands";
 import { parseNumericValue, parseTableSelection } from "../src/modules/datacheck/parser";
 import type { TableSelectionDraft } from "../src/modules/datacheck/types";
 
@@ -59,9 +62,7 @@ describe("datacheck parser", function () {
           ["Beta", "30", "40"],
         ],
         selectionRectCount: 6,
-        extractionDiagnostics: [
-          "Geometry extracted 3 visual row(s) from 6 selection rectangle(s).",
-        ],
+        extractionDiagnostics: ["structured-selection-ready"],
       }),
     );
 
@@ -69,7 +70,7 @@ describe("datacheck parser", function () {
     assert.equal(table.columnCount, 3);
     assert.deepEqual(table.header, ["Group", "Value A", "Value B"]);
     assert.equal(table.selectionRectCount, 6);
-    assert.include(table.reconstructionWarnings[0], "Geometry extracted");
+    assert.include(table.reconstructionWarnings, "structured-selection-ready");
   });
 });
 
@@ -86,27 +87,26 @@ describe("datacheck audit", function () {
       ),
     );
     const report = buildAuditReport(table);
+    const duplicateNumericSequences = report.detectorResults.find(
+      (result) => result.detectorId === "duplicate-numeric-sequences",
+    );
+    const invalidPValues = report.detectorResults.find(
+      (result) => result.detectorId === "invalid-p-values",
+    );
+    const invalidPercentages = report.detectorResults.find(
+      (result) => result.detectorId === "invalid-percentages",
+    );
 
     assert.equal(report.findingCount, 3);
-    assert.include(report.summary, "produced 3 finding(s)");
-    assert.include(
-      report.detectorResults.find(
-        (result) => result.detectorId === "duplicate-numeric-sequences",
-      )?.summary,
-      "Detected 1 repeated numeric sequence",
-    );
-    assert.include(
-      report.detectorResults.find(
-        (result) => result.detectorId === "invalid-p-values",
-      )?.findings[0].message,
-      "out-of-range p-value",
-    );
-    assert.include(
-      report.detectorResults.find(
-        (result) => result.detectorId === "invalid-percentages",
-      )?.findings[0].message,
-      "out-of-range percentage",
-    );
+    assert.exists(duplicateNumericSequences);
+    assert.equal(duplicateNumericSequences?.severity, "warning");
+    assert.lengthOf(duplicateNumericSequences?.findings ?? [], 1);
+    assert.exists(invalidPValues);
+    assert.equal(invalidPValues?.severity, "warning");
+    assert.lengthOf(invalidPValues?.findings ?? [], 1);
+    assert.exists(invalidPercentages);
+    assert.equal(invalidPercentages?.severity, "warning");
+    assert.lengthOf(invalidPercentages?.findings ?? [], 1);
   });
 
   it("flags repeated numeric columns and dominant repeated values", function () {
@@ -122,19 +122,38 @@ describe("datacheck audit", function () {
       ),
     );
     const report = buildAuditReport(table);
+    const repeatedColumns = report.detectorResults.find(
+      (result) => result.detectorId === "repeated-numeric-columns",
+    );
+    const uniformColumns = report.detectorResults.find(
+      (result) => result.detectorId === "uniform-numeric-columns",
+    );
 
-    assert.include(
-      report.detectorResults.find(
-        (result) => result.detectorId === "repeated-numeric-columns",
-      )?.summary,
-      "Detected 1 repeated numeric column pattern",
+    assert.exists(repeatedColumns);
+    assert.equal(repeatedColumns?.severity, "warning");
+    assert.lengthOf(repeatedColumns?.findings ?? [], 1);
+    assert.exists(uniformColumns);
+    assert.lengthOf(uniformColumns?.findings ?? [], 1);
+  });
+
+  it("flags Benford deviation when leading digits are heavily skewed", function () {
+    const table = parseTableSelection(
+      createDraft(
+        [
+          "ID\tValue",
+          ...Array.from({ length: 20 }, (_, index) => `R${index + 1}\t9${index + 10}`),
+        ].join("\n"),
+      ),
     );
-    assert.include(
-      report.detectorResults.find(
-        (result) => result.detectorId === "uniform-numeric-columns",
-      )?.findings[0].message,
-      "repeats 9",
+    const report = buildAuditReport(table);
+    const benfordResult = report.detectorResults.find(
+      (result) => result.detectorId === "benford-deviation",
     );
+
+    assert.exists(benfordResult);
+    assert.equal(benfordResult?.applicability, "applied");
+    assert.equal(benfordResult?.severity, "warning");
+    assert.lengthOf(benfordResult?.findings ?? [], 1);
   });
 });
 
@@ -166,5 +185,56 @@ describe("datacheck selection popup", function () {
     });
 
     assert.lengthOf(container.querySelectorAll("button"), 1);
+  });
+});
+
+describe("datacheck report visuals", function () {
+  it("builds leading-digit and column-mix profiles for report charts", function () {
+    const table = parseTableSelection(
+      createDraft(
+        [
+          "Group\tValue\tRate\tp",
+          "A\t12\t10%\tp = 0.30",
+          "B\t25\t20%\tp = 0.40",
+          "C\t39\t30%\tp = 0.50",
+        ].join("\n"),
+      ),
+    );
+
+    const visuals = buildReportVisualizationModel(table);
+
+    assert.equal(visuals.numericCellCount, 9);
+    assert.equal(visuals.firstDigitSampleCount, 3);
+    assert.equal(visuals.firstDigitBins[0].observedCount, 1);
+    assert.equal(visuals.firstDigitBins[1].observedCount, 1);
+    assert.equal(visuals.firstDigitBins[2].observedCount, 1);
+    assert.lengthOf(visuals.columnProfiles, 3);
+    assert.deepInclude(
+      visuals.columnProfiles.find((profile) => profile.label === "Value (B)"),
+      {
+        total: 3,
+        numberCount: 3,
+        percentageCount: 0,
+        pValueCount: 0,
+      },
+    );
+    assert.deepInclude(
+      visuals.columnProfiles.find((profile) => profile.label === "Rate (C)"),
+      {
+        total: 3,
+        numberCount: 0,
+        percentageCount: 3,
+        pValueCount: 0,
+      },
+    );
+    assert.deepInclude(
+      visuals.columnProfiles.find((profile) => profile.label === "p (D)"),
+      {
+        total: 3,
+        numberCount: 0,
+        percentageCount: 0,
+        pValueCount: 3,
+      },
+    );
   });
 });

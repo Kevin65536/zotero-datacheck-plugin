@@ -5,6 +5,7 @@ import type {
   TableRow,
   TableSelectionDraft,
 } from "./types";
+import { getString } from "../../utils/locale";
 
 interface DelimiterCandidate {
   name: string;
@@ -53,25 +54,19 @@ export function parseTableSelection(
   const reconstructionWarnings: string[] = [...(draft.extractionDiagnostics ?? [])];
 
   if (lines.length < 2) {
-    reconstructionWarnings.push(
-      "Selection contains fewer than two non-empty lines.",
-    );
+    reconstructionWarnings.push(getString("parser-warning-too-few-lines"));
   }
 
   const delimiter = chooseDelimiter(lines);
   if (!delimiter) {
-    reconstructionWarnings.push(
-      "Could not infer a stable multi-column delimiter from the selected text.",
-    );
+    reconstructionWarnings.push(getString("parser-warning-no-delimiter"));
   }
 
   const rawRows = lines.map((line) => splitLine(line, delimiter));
   const columnCount = Math.max(1, ...rawRows.map((row) => row.length));
 
   if (columnCount < 2) {
-    reconstructionWarnings.push(
-      "Parsed selection only contains a single column after normalization.",
-    );
+    reconstructionWarnings.push(getString("parser-warning-single-column"));
   }
 
   const paddedRows = rawRows.map((row) => {
@@ -83,9 +78,7 @@ export function parseTableSelection(
   });
 
   if (paddedRows.some((row) => row.some((cell) => cell.length === 0))) {
-    reconstructionWarnings.push(
-      "Some rows have missing cells after column alignment.",
-    );
+    reconstructionWarnings.push(getString("parser-warning-missing-cells"));
   }
 
   return buildTableDocumentFromRows(

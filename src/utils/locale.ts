@@ -74,7 +74,8 @@ function _getString(
 ): string {
   const localStringWithPrefix = `${config.addonRef}-${localeString}`;
   const { branch, args } = options;
-  const pattern = addon.data.locale?.current.formatMessagesSync([
+  const localeStore = (globalThis as any).addon?.data?.locale?.current;
+  const pattern = localeStore?.formatMessagesSync([
     { id: localStringWithPrefix, args },
   ])[0] as Pattern;
 

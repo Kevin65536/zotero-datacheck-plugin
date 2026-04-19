@@ -8,6 +8,7 @@ const TEST_PROFILE_DIR = ".scaffold/test/profile";
 const TEST_DATA_DIR = ".scaffold/test/data";
 const TEST_PROFILE_FIXTURE_DIR = "test/fixtures/profile";
 const TEST_DATA_FIXTURE_DIR = "test/fixtures/data";
+const IGNORED_TEST_SEED_ENTRIES = new Set([".gitkeep"]);
 
 function readEnvPath(name: string): string | undefined {
   const value = process.env[name]?.trim();
@@ -58,6 +59,10 @@ async function copyDirectoryContents(
   const entries = await readdir(sourceDir, { withFileTypes: true });
 
   for (const entry of entries) {
+    if (IGNORED_TEST_SEED_ENTRIES.has(entry.name)) {
+      continue;
+    }
+
     await cp(resolve(sourceDir, entry.name), resolve(targetDir, entry.name), {
       recursive: true,
       force: true,
