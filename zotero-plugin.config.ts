@@ -1,5 +1,71 @@
+import { existsSync } from "node:fs";
+import { cp, mkdir, readdir } from "node:fs/promises";
+import { resolve } from "node:path";
 import { defineConfig } from "zotero-plugin-scaffold";
 import pkg from "./package.json";
+
+const TEST_PROFILE_DIR = ".scaffold/test/profile";
+const TEST_DATA_DIR = ".scaffold/test/data";
+const TEST_PROFILE_FIXTURE_DIR = "test/fixtures/profile";
+const TEST_DATA_FIXTURE_DIR = "test/fixtures/data";
+
+function readEnvPath(name: string): string | undefined {
+  const value = process.env[name]?.trim();
+  return value ? value : undefined;
+}
+
+function resolveFixturePath(path: string): string | undefined {
+  const resolvedPath = resolve(path);
+  return existsSync(resolvedPath) ? resolvedPath : undefined;
+}
+
+function resolveTestSeedPlan() {
+  const explicitProfileSeed = readEnvPath(
+    "ZOTERO_PLUGIN_TEST_PROFILE_SEED_PATH",
+  );
+  const explicitDataSeed = readEnvPath("ZOTERO_PLUGIN_TEST_DATA_SEED_PATH");
+  const fixtureProfileSeed = resolveFixturePath(TEST_PROFILE_FIXTURE_DIR);
+  const fixtureDataSeed = resolveFixturePath(TEST_DATA_FIXTURE_DIR);
+  const developmentProfileSeed = readEnvPath("ZOTERO_PLUGIN_PROFILE_PATH");
+  const developmentDataSeed = readEnvPath("ZOTERO_PLUGIN_DATA_DIR");
+
+  return {
+    profileSeedPath:
+      explicitProfileSeed ?? fixtureProfileSeed ?? developmentProfileSeed,
+    dataSeedPath: explicitDataSeed ?? fixtureDataSeed ?? developmentDataSeed,
+    usedDevelopmentProfileFallback:
+      !explicitProfileSeed &&
+      !fixtureProfileSeed &&
+      Boolean(developmentProfileSeed),
+    usedDevelopmentDataFallback:
+      !explicitDataSeed && !fixtureDataSeed && Boolean(developmentDataSeed),
+  };
+}
+
+async function copyDirectoryContents(
+  sourceDir: string | undefined,
+  targetDir: string,
+): Promise<boolean> {
+  if (!sourceDir) {
+    return false;
+  }
+
+  if (!existsSync(sourceDir)) {
+    throw new Error(`Zotero test seed directory not found: ${sourceDir}`);
+  }
+
+  await mkdir(targetDir, { recursive: true });
+  const entries = await readdir(sourceDir, { withFileTypes: true });
+
+  for (const entry of entries) {
+    await cp(resolve(sourceDir, entry.name), resolve(targetDir, entry.name), {
+      recursive: true,
+      force: true,
+    });
+  }
+
+  return true;
+}
 
 export default defineConfig({
   source: ["src", "addon"],
@@ -41,6 +107,38 @@ export default defineConfig({
 
   test: {
     waitForPlugin: `() => Zotero.${pkg.config.addonInstance}.data.initialized`,
+    hooks: {
+      "test:init": async (ctx) => {
+        const seedPlan = resolveTestSeedPlan();
+        const copiedProfile = await copyDirectoryContents(
+          seedPlan.profileSeedPath,
+          TEST_PROFILE_DIR,
+        );
+        const copiedData = await copyDirectoryContents(
+          seedPlan.dataSeedPath,
+          TEST_DATA_DIR,
+        );
+
+        if (copiedProfile || copiedData) {
+          ctx.logger.info(
+            `Prepared isolated Zotero test data from ${copiedProfile ? seedPlan.profileSeedPath : "no profile seed"} and ${copiedData ? seedPlan.dataSeedPath : "no data seed"}.`,
+          );
+        } else {
+          ctx.logger.info(
+            "No Zotero test seed was configured. npm test will run against an empty isolated library.",
+          );
+        }
+
+        if (
+          seedPlan.usedDevelopmentProfileFallback ||
+          seedPlan.usedDevelopmentDataFallback
+        ) {
+          ctx.logger.warn(
+            "Falling back to ZOTERO_PLUGIN_PROFILE_PATH/ZOTERO_PLUGIN_DATA_DIR for test seeding. Prefer dedicated ZOTERO_PLUGIN_TEST_* seed paths or committed test/fixtures snapshots to keep npm test fast and deterministic.",
+          );
+        }
+      },
+    },
   },
 
   // If you need to see a more detailed log, uncomment the following line:
