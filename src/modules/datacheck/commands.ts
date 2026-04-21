@@ -5,6 +5,7 @@ import { parseTableSelection } from "./parser";
 import {
   createTableSelectionDraft,
   getActiveReaderContext,
+  hydrateSelectionAnnotationText,
   rememberReaderSelection,
 } from "./reader";
 import type { AuditReport, TableDocument } from "./types";
@@ -75,6 +76,110 @@ export function appendSelectionPopupAnalyzeButton({
   append(button);
 
   return button;
+}
+
+function normalizeReaderPopupError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+function maybeRefreshPdfTranslatePopup({
+  doc,
+  append,
+  reader,
+  annotation,
+  logError,
+}: {
+  doc: Document;
+  append: _ZoteroTypes.Reader.ReaderAppendType["appendDOM"];
+  reader: any;
+  annotation?: _ZoteroTypes.Annotations.AnnotationJson;
+  logError: (error: Error) => void;
+}) {
+  const pdfTranslate = (Zotero as any).PDFTranslate;
+  const addonRef = pdfTranslate?.data?.config?.addonRef as string | undefined;
+  const onReaderPopupShow = pdfTranslate?.hooks?.onReaderPopupShow as
+    | ((
+        event: _ZoteroTypes.Reader.EventParams<"renderTextSelectionPopup">,
+      ) => void)
+    | undefined;
+  const selectedText =
+    typeof annotation?.text === "string" ? annotation.text.trim() : "";
+
+  if (!addonRef || typeof onReaderPopupShow !== "function" || !selectedText) {
+    return;
+  }
+
+  if (doc.querySelector(`.${addonRef}-readerpopup`)) {
+    return;
+  }
+
+  try {
+    if (pdfTranslate?.data?.translate) {
+      pdfTranslate.data.translate.selectedText = selectedText;
+    }
+
+    onReaderPopupShow({
+      doc,
+      append,
+      params: { annotation },
+      reader,
+    } as _ZoteroTypes.Reader.EventParams<"renderTextSelectionPopup">);
+  } catch (error) {
+    logError(normalizeReaderPopupError(error));
+  }
+}
+
+export function renderSelectionPopupAnalyzeAction({
+  doc,
+  append,
+  label,
+  onCommand,
+  reader,
+  annotation,
+  rememberSelection = rememberReaderSelection,
+  logError = (error: Error) => {
+    Zotero.logError(error);
+  },
+}: {
+  doc: Document;
+  append: _ZoteroTypes.Reader.ReaderAppendType["appendDOM"];
+  label: string;
+  onCommand: () => void;
+  reader: any;
+  annotation?: _ZoteroTypes.Annotations.AnnotationJson;
+  rememberSelection?: (
+    reader: any,
+    annotation?: _ZoteroTypes.Annotations.AnnotationJson,
+  ) => void;
+  logError?: (error: Error) => void;
+}) {
+  hydrateSelectionAnnotationText(reader, annotation);
+
+  try {
+    rememberSelection(reader, annotation);
+  } catch (error) {
+    logError(normalizeReaderPopupError(error));
+  }
+
+  maybeRefreshPdfTranslatePopup({
+    doc,
+    append,
+    reader,
+    annotation,
+    logError,
+  });
+
+  try {
+    return appendSelectionPopupAnalyzeButton({
+      doc,
+      append,
+      label,
+      onCommand,
+    });
+  } catch (error) {
+    logError(normalizeReaderPopupError(error));
+    return undefined;
+  }
 }
 
 export function buildReportVisualizationModel(
@@ -160,10 +265,11 @@ export function buildReportVisualizationModel(
 export class DataCheckCommandFactory {
   private static readonly renderTextSelectionPopupHandler: _ZoteroTypes.Reader.EventHandler<"renderTextSelectionPopup"> =
     ({ doc, append, params, reader }) => {
-      rememberReaderSelection(reader, params.annotation);
-      appendSelectionPopupAnalyzeButton({
+      renderSelectionPopupAnalyzeAction({
         doc,
         append,
+        reader,
+        annotation: params.annotation,
         label: getString("selection-popup-analyze-label"),
         onCommand: () => {
           void DataCheckCommandFactory.runAnalyzeCurrentReader();

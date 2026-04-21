@@ -41,6 +41,33 @@ interface RememberedReaderSelection {
 
 let rememberedReaderSelection: RememberedReaderSelection | undefined;
 
+export function hydrateSelectionAnnotationText(
+  reader: any,
+  annotation?: _ZoteroTypes.Annotations.AnnotationJson,
+): string {
+  const existingText =
+    typeof annotation?.text === "string" ? annotation.text.trim() : "";
+  if (existingText) {
+    return existingText;
+  }
+
+  const fallbackText = getSelectedText(
+    reader,
+    snapshotSelectionAnnotation(annotation),
+  ).trim();
+  if (!fallbackText || !annotation) {
+    return fallbackText;
+  }
+
+  try {
+    annotation.text = fallbackText;
+  } catch {
+    // Some cross-compartment annotation objects may reject writes.
+  }
+
+  return fallbackText;
+}
+
 export function rememberReaderSelection(
   reader: any,
   annotation?: _ZoteroTypes.Annotations.AnnotationJson,

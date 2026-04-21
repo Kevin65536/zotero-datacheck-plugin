@@ -132,9 +132,7 @@ function bindPrefEvents() {
       addon.data.prefs!.window.alert(
         getString("prefs-command-toggle-alert", {
           args: {
-            state: getPrefToggleStateLabel(
-              (e.target as XUL.Checkbox).checked,
-            ),
+            state: getPrefToggleStateLabel((e.target as XUL.Checkbox).checked),
           },
         }),
       );

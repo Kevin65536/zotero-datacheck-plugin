@@ -3,6 +3,7 @@ import { buildAuditReport } from "../src/modules/datacheck/audit";
 import {
   appendSelectionPopupAnalyzeButton,
   buildReportVisualizationModel,
+  renderSelectionPopupAnalyzeAction,
 } from "../src/modules/datacheck/commands";
 import {
   parseNumericValue,
@@ -168,13 +169,18 @@ describe("datacheck", function () {
   });
 
   describe("datacheck selection popup", function () {
-    it("keeps a single analyze button when the popup renders repeatedly", function () {
+    it("keeps a single analyze button without removing sibling popup content", function () {
       const doc =
         Zotero.getMainWindow().document.implementation.createHTMLDocument(
           "datacheck-selection-popup",
         );
       const container = doc.createElement("div");
       doc.body.append(container);
+
+      const translatePanel = doc.createElement("div");
+      translatePanel.className = "pdf-translate-panel";
+      translatePanel.textContent = "Translated text";
+      container.append(translatePanel);
 
       const append: _ZoteroTypes.Reader.ReaderAppendType["appendDOM"] = (
         ...nodes
@@ -196,6 +202,125 @@ describe("datacheck", function () {
       });
 
       assert.lengthOf(container.querySelectorAll("button"), 1);
+      assert.equal(
+        container.querySelector(".pdf-translate-panel")?.textContent,
+        "Translated text",
+      );
+    });
+
+    it("isolates popup append failures so sibling plugins can keep rendering", function () {
+      const doc =
+        Zotero.getMainWindow().document.implementation.createHTMLDocument(
+          "datacheck-selection-popup-errors",
+        );
+      const container = doc.createElement("div");
+      doc.body.append(container);
+
+      const loggedErrors: Error[] = [];
+      const append: _ZoteroTypes.Reader.ReaderAppendType["appendDOM"] = (
+        ...nodes
+      ) => {
+        if (nodes.some((node) => (node as Element).nodeName === "BUTTON")) {
+          throw new Error("datacheck popup append failed");
+        }
+        container.append(...nodes);
+      };
+
+      assert.doesNotThrow(() => {
+        renderSelectionPopupAnalyzeAction({
+          doc,
+          append,
+          label: "Analyze Selection",
+          onCommand: () => undefined,
+          reader: { tabID: "reader-1" },
+          rememberSelection: () => undefined,
+          logError: (error) => {
+            loggedErrors.push(error);
+          },
+        });
+
+        const translatePanel = doc.createElement("div");
+        translatePanel.className = "pdf-translate-panel";
+        translatePanel.textContent = "Translated text";
+        append(translatePanel);
+      });
+
+      assert.lengthOf(loggedErrors, 1);
+      assert.include(loggedErrors[0].message, "datacheck popup append failed");
+      assert.lengthOf(container.querySelectorAll("button"), 0);
+      assert.equal(
+        container.querySelector(".pdf-translate-panel")?.textContent,
+        "Translated text",
+      );
+    });
+
+    it("hydrates empty selection text for PDF Translate popup compatibility", function () {
+      const doc =
+        Zotero.getMainWindow().document.implementation.createHTMLDocument(
+          "datacheck-selection-popup-compatibility",
+        );
+      const container = doc.createElement("div");
+      doc.body.append(container);
+
+      const annotation = {
+        text: "",
+        position: {
+          pageIndex: 0,
+          rects: [[0, 0, 10, 10]],
+        },
+      } as any;
+      const append: _ZoteroTypes.Reader.ReaderAppendType["appendDOM"] = (
+        ...nodes
+      ) => {
+        container.append(...nodes);
+      };
+      const previousPDFTranslate = (Zotero as any).PDFTranslate;
+
+      (Zotero as any).PDFTranslate = {
+        data: {
+          config: { addonRef: "zotero-pdf-translate" },
+          translate: { selectedText: "" },
+        },
+        hooks: {
+          onReaderPopupShow: ({ doc, append }: any) => {
+            const panel = doc.createElement("div");
+            panel.className = "zotero-pdf-translate-readerpopup";
+            panel.textContent = (
+              Zotero as any
+            ).PDFTranslate.data.translate.selectedText;
+            append(panel);
+          },
+        },
+      };
+
+      try {
+        renderSelectionPopupAnalyzeAction({
+          doc,
+          append,
+          label: "Analyze Selection",
+          onCommand: () => undefined,
+          reader: {
+            tabID: "reader-1",
+            _iframeWindow: {
+              getSelection: () => ({
+                toString: () => "Recovered table selection",
+              }),
+            },
+          },
+          annotation,
+          rememberSelection: () => undefined,
+        });
+
+        assert.equal(annotation.text, "Recovered table selection");
+        assert.equal(
+          container.querySelector(".zotero-pdf-translate-readerpopup")
+            ?.textContent,
+          "Recovered table selection",
+        );
+        assert.lengthOf(container.querySelectorAll("button"), 1);
+      } finally {
+        (Zotero as any).PDFTranslate = previousPDFTranslate;
+      }
     });
   });
 
