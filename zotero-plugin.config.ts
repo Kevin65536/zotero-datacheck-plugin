@@ -14,8 +14,8 @@ const IGNORED_TEST_SEED_ENTRIES = new Set([
   ".parentlock",
   "lock",
 ]);
-const USE_DEVELOPMENT_TEST_SEED =
-  process.env.ZOTERO_PLUGIN_TEST_USE_DEVELOPMENT_SEED === "1";
+const PREFER_DEVELOPMENT_TEST_SEED =
+  process.env.ZOTERO_PLUGIN_TEST_USE_DEVELOPMENT_SEED !== "0";
 
 function readEnvPath(name: string): string | undefined {
   const value = process.env[name]?.trim();
@@ -38,23 +38,24 @@ function resolveTestSeedPlan() {
   const developmentDataSeed = readEnvPath("ZOTERO_PLUGIN_DATA_DIR");
   const profileSeedPath = explicitProfileSeed
     ? explicitProfileSeed
-    : USE_DEVELOPMENT_TEST_SEED
+    : PREFER_DEVELOPMENT_TEST_SEED
       ? (developmentProfileSeed ?? fixtureProfileSeed)
       : (fixtureProfileSeed ?? developmentProfileSeed);
   const dataSeedPath = explicitDataSeed
     ? explicitDataSeed
-    : USE_DEVELOPMENT_TEST_SEED
+    : PREFER_DEVELOPMENT_TEST_SEED
       ? (developmentDataSeed ?? fixtureDataSeed)
       : (fixtureDataSeed ?? developmentDataSeed);
 
   return {
     profileSeedPath,
     dataSeedPath,
-    usedDevelopmentProfileFallback:
+    usedDevelopmentProfileSeed:
       !explicitProfileSeed && profileSeedPath === developmentProfileSeed,
-    usedDevelopmentDataFallback:
+    usedDevelopmentDataSeed:
       !explicitDataSeed && dataSeedPath === developmentDataSeed,
-    usingDevelopmentSeedOverride: USE_DEVELOPMENT_TEST_SEED,
+    usingFixtureSeedOverride:
+      process.env.ZOTERO_PLUGIN_TEST_USE_DEVELOPMENT_SEED === "0",
   };
 }
 
@@ -150,17 +151,17 @@ export default defineConfig({
         }
 
         if (
-          seedPlan.usedDevelopmentProfileFallback ||
-          seedPlan.usedDevelopmentDataFallback
+          seedPlan.usedDevelopmentProfileSeed ||
+          seedPlan.usedDevelopmentDataSeed
         ) {
-          ctx.logger.warn(
-            "Falling back to ZOTERO_PLUGIN_PROFILE_PATH/ZOTERO_PLUGIN_DATA_DIR for test seeding. Prefer dedicated ZOTERO_PLUGIN_TEST_* seed paths or committed test/fixtures snapshots to keep npm test fast and deterministic.",
+          ctx.logger.info(
+            "npm test now prefers ZOTERO_PLUGIN_PROFILE_PATH/ZOTERO_PLUGIN_DATA_DIR when available. Set ZOTERO_PLUGIN_TEST_USE_DEVELOPMENT_SEED=0 to prefer committed fixtures instead.",
           );
         }
 
-        if (seedPlan.usingDevelopmentSeedOverride) {
+        if (seedPlan.usingFixtureSeedOverride) {
           ctx.logger.info(
-            "ZOTERO_PLUGIN_TEST_USE_DEVELOPMENT_SEED=1 is set, so npm test prefers the development profile/data paths over committed fixtures.",
+            "ZOTERO_PLUGIN_TEST_USE_DEVELOPMENT_SEED=0 is set, so npm test prefers committed fixtures over the development profile/data paths.",
           );
         }
       },
