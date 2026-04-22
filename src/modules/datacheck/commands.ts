@@ -547,10 +547,13 @@ export class DataCheckCommandFactory {
       addon.data.dataCheck.lastTableDocument = tableResults[0].table;
       addon.data.dataCheck.lastAuditReport = tableResults[0].report;
 
-      const popupWin = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
-        closeOnClick: true,
-        closeTime: -1,
-      })
+      const popupWin = new ztoolkit.ProgressWindow(
+        addon.data.config.addonName,
+        {
+          closeOnClick: true,
+          closeTime: -1,
+        },
+      )
         .createLine({
           text: getString("command-pdf-analysis-complete", {
             args: { tables: tableResults.length },
@@ -669,7 +672,10 @@ export class DataCheckCommandFactory {
           tag: "div",
           namespace: "html",
           properties: {
-            innerHTML: this.renderPdfAuditReportMarkup(scanResult, tableResults),
+            innerHTML: this.renderPdfAuditReportMarkup(
+              scanResult,
+              tableResults,
+            ),
           },
           styles: {
             width: "980px",

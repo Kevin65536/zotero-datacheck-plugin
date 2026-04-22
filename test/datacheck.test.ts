@@ -19,9 +19,7 @@ import type {
   TableSelectionDraft,
 } from "../src/modules/datacheck/types";
 
-const REAL_PDF_TITLE_QUERY = readTestEnv(
-  "ZOTERO_PLUGIN_TEST_PDF_TITLE_QUERY",
-);
+const REAL_PDF_TITLE_QUERY = readTestEnv("ZOTERO_PLUGIN_TEST_PDF_TITLE_QUERY");
 const REAL_PDF_MIN_TABLES = readPositiveIntEnv(
   "ZOTERO_PLUGIN_TEST_PDF_MIN_TABLES",
   1,
@@ -104,7 +102,8 @@ function describeDraft(draft: TableSelectionDraft, index: number): string {
     ...(draft.structuredRows?.map((row) => row.length) ?? [0]),
   );
   const preview = formatPreviewRow(draft.structuredRows?.[0]);
-  const diagnostics = (draft.extractionDiagnostics ?? []).join(" || ") || "<none>";
+  const diagnostics =
+    (draft.extractionDiagnostics ?? []).join(" || ") || "<none>";
 
   return [
     `  [table ${index + 1}] page=${draft.pageNumber ?? "?"} rows=${rowCount} cols=${columnCount}`,
@@ -114,7 +113,9 @@ function describeDraft(draft: TableSelectionDraft, index: number): string {
 }
 
 function formatDebugSummary(
-  debugResult: NonNullable<Awaited<ReturnType<typeof debugScanActiveReaderForTables>>>,
+  debugResult: NonNullable<
+    Awaited<ReturnType<typeof debugScanActiveReaderForTables>>
+  >,
 ): string {
   const zeroEntryPages = debugResult.pages.filter(
     (page) => page.entryCount === 0,
@@ -164,10 +165,12 @@ async function inspectReaderTextAccess(
       ? Object.keys(directTextContent.styles).length
       : 0;
 
-    const iframeWindow = reader?._iframeWindow?.wrappedJSObject ?? reader?._iframeWindow;
-    const pageView = iframeWindow?.PDFViewerApplication?.pdfViewer?.getPageView?.(
-      pageNumber - 1,
-    );
+    const iframeWindow =
+      reader?._iframeWindow?.wrappedJSObject ?? reader?._iframeWindow;
+    const pageView =
+      iframeWindow?.PDFViewerApplication?.pdfViewer?.getPageView?.(
+        pageNumber - 1,
+      );
     const textLayerDiv =
       pageView?.textLayer?.div ??
       pageView?.div?.querySelector?.(".textLayer") ??
@@ -202,7 +205,9 @@ async function inspectReaderTextAccess(
           };
         }).apply(this, arguments);`,
       );
-      const realmResult = runner ? await runner.call(iframeWindow, pageNumber) : undefined;
+      const realmResult = runner
+        ? await runner.call(iframeWindow, pageNumber)
+        : undefined;
       if (realmResult?.error) {
         contentRealmSummary = `error=${realmResult.error}`;
       } else if (realmResult) {
@@ -231,7 +236,9 @@ function logRealPdfScanResult(params: {
   query: string;
   attachment: Zotero.Item;
   filePath: string | false;
-  scanResult: NonNullable<Awaited<ReturnType<typeof scanActiveReaderForTables>>>;
+  scanResult: NonNullable<
+    Awaited<ReturnType<typeof scanActiveReaderForTables>>
+  >;
   debugSummary: string;
   rawSummary: string;
 }) {
@@ -305,7 +312,9 @@ async function findPdfAttachmentByQuery(
 
     if (item.parentID) {
       if (!parentTitleCache.has(item.parentID)) {
-        const parentItem = (await Zotero.Items.getAsync(item.parentID)) as Zotero.Item;
+        const parentItem = (await Zotero.Items.getAsync(
+          item.parentID,
+        )) as Zotero.Item;
         parentTitleCache.set(
           item.parentID,
           parentItem.getField("title", false, true).toLowerCase(),
@@ -432,7 +441,10 @@ describe("datacheck", function () {
         ["Week 2", "0.20", "Review"],
       ]);
       assert.isAbove(drafts[0].selectedTextLength, 0);
-      assert.include(drafts[1].extractionDiagnostics ?? [], "caption=Table 2. Follow-up outcomes.");
+      assert.include(
+        drafts[1].extractionDiagnostics ?? [],
+        "caption=Table 2. Follow-up outcomes.",
+      );
     });
 
     it("ignores captionless multi-column blocks during full-page scans", function () {
@@ -560,7 +572,10 @@ describe("datacheck", function () {
           return;
         }
         const debugResult = await debugScanActiveReaderForTables(reader);
-        assert.isOk(debugResult, "debugScanActiveReaderForTables returned null");
+        assert.isOk(
+          debugResult,
+          "debugScanActiveReaderForTables returned null",
+        );
         if (!debugResult) {
           return;
         }

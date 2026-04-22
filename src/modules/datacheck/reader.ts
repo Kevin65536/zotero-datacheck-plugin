@@ -308,7 +308,9 @@ export async function scanActiveReaderForTables(
           args: { page: pageNumber },
         }),
       );
-      Zotero.logError(error instanceof Error ? error : new Error(String(error)));
+      Zotero.logError(
+        error instanceof Error ? error : new Error(String(error)),
+      );
     }
   }
 
@@ -384,8 +386,12 @@ export async function debugScanActiveReaderForTables(
           .join(" | "),
         blockSummaries: rowBlocks.slice(0, 3).map((rowBlock) => ({
           rowCount: rowBlock.length,
-          maxColumnCount: Math.max(...rowBlock.map((row) => row.cells.length), 0),
-          preview: rowBlock[0]?.cells.map((cell) => cell.text).join(" | ") ?? "",
+          maxColumnCount: Math.max(
+            ...rowBlock.map((row) => row.cells.length),
+            0,
+          ),
+          preview:
+            rowBlock[0]?.cells.map((cell) => cell.text).join(" | ") ?? "",
         })),
       });
     } catch (error) {
@@ -394,7 +400,9 @@ export async function debugScanActiveReaderForTables(
           args: { page: pageNumber },
         }),
       );
-      Zotero.logError(error instanceof Error ? error : new Error(String(error)));
+      Zotero.logError(
+        error instanceof Error ? error : new Error(String(error)),
+      );
     }
   }
 
@@ -414,7 +422,9 @@ async function getReaderAttachmentMetadata(reader: any): Promise<{
   attachmentKey: string;
   itemTitle: string;
 }> {
-  const attachment = (await Zotero.Items.getAsync(reader.itemID)) as Zotero.Item;
+  const attachment = (await Zotero.Items.getAsync(
+    reader.itemID,
+  )) as Zotero.Item;
   const parentItem = attachment.parentID
     ? ((await Zotero.Items.getAsync(attachment.parentID)) as Zotero.Item)
     : undefined;
@@ -451,7 +461,10 @@ async function getPdfPageTextEntries(
   pdfDocument: any,
   pageNumber: number,
 ): Promise<PageTextEntry[]> {
-  const directEntries = await getPdfPageTextEntriesDirect(pdfDocument, pageNumber);
+  const directEntries = await getPdfPageTextEntriesDirect(
+    pdfDocument,
+    pageNumber,
+  );
   if (directEntries.length) {
     return directEntries;
   }
@@ -472,7 +485,8 @@ async function getPdfPageTextEntriesFromContentWindow(
   reader: any,
   pageNumber: number,
 ): Promise<PageTextEntry[]> {
-  const iframeWindow = reader?._iframeWindow?.wrappedJSObject ?? reader?._iframeWindow;
+  const iframeWindow =
+    reader?._iframeWindow?.wrappedJSObject ?? reader?._iframeWindow;
   const runner = iframeWindow?.Function?.(
     `return (async function(pageNumber) {
       const app = this.PDFViewerApplication;
@@ -579,14 +593,9 @@ function buildPageTextEntry(
     const centerY = Number(item?.centerY);
 
     if (
-      ![
-        left,
-        top,
-        right,
-        bottom,
-        centerX,
-        centerY,
-      ].every((value) => Number.isFinite(value))
+      ![left, top, right, bottom, centerX, centerY].every((value) =>
+        Number.isFinite(value),
+      )
     ) {
       return undefined;
     }
@@ -671,7 +680,9 @@ function buildTableRows(entries: PageTextEntry[]): TableLikeRow[] {
     lastRow.top = Math.min(lastRow.top, entry.top);
     lastRow.right = Math.max(lastRow.right, entry.right);
     lastRow.bottom = Math.max(lastRow.bottom, entry.bottom);
-    lastRow.centerY = getMedian(lastRow.entries.map((rowEntry) => rowEntry.centerY));
+    lastRow.centerY = getMedian(
+      lastRow.entries.map((rowEntry) => rowEntry.centerY),
+    );
   }
 
   return rows
@@ -738,7 +749,9 @@ function collectTableRowBlocks(rows: TableLikeRow[]): TableLikeRow[][] {
   return rowBlocks;
 }
 
-function collectTableCaptionAnchors(rows: TableLikeRow[]): TableCaptionAnchor[] {
+function collectTableCaptionAnchors(
+  rows: TableLikeRow[],
+): TableCaptionAnchor[] {
   return rows.flatMap((row) =>
     row.cells.flatMap((cell) => {
       const captionText = cell.text.replace(/\s+/g, " ").trim();
@@ -815,7 +828,13 @@ function isRowBlockAnchoredByCaption(
 
   if (
     nextCaption &&
-    rangesOverlap(caption.left, caption.right, nextCaption.left, nextCaption.right, 24) &&
+    rangesOverlap(
+      caption.left,
+      caption.right,
+      nextCaption.left,
+      nextCaption.right,
+      24,
+    ) &&
     firstRow.centerY <= nextCaption.centerY
   ) {
     return false;
@@ -922,35 +941,41 @@ function selectClusterForCaption(
       .reverse()
       .find(
         (cluster) =>
-          (cluster.at(-1)?.right ?? Number.NEGATIVE_INFINITY) >= caption.left - 24,
+          (cluster.at(-1)?.right ?? Number.NEGATIVE_INFINITY) >=
+          caption.left - 24,
       );
   }
 
   if (captionMode === "left") {
     return cellClusters.find(
-      (cluster) => (cluster[0]?.left ?? Number.POSITIVE_INFINITY) <= caption.right + 24,
+      (cluster) =>
+        (cluster[0]?.left ?? Number.POSITIVE_INFINITY) <= caption.right + 24,
     );
   }
 
-  return cellClusters.reduce<StructuredCell[] | undefined>((bestCluster, cluster) => {
-    const clusterLeft = Math.min(...cluster.map((cell) => cell.left));
-    const clusterRight = Math.max(...cluster.map((cell) => cell.right));
-    const clusterOverlap = Math.max(
-      0,
-      Math.min(clusterRight, caption.right) - Math.max(clusterLeft, caption.left),
-    );
-    if (!bestCluster) {
-      return cluster;
-    }
+  return cellClusters.reduce<StructuredCell[] | undefined>(
+    (bestCluster, cluster) => {
+      const clusterLeft = Math.min(...cluster.map((cell) => cell.left));
+      const clusterRight = Math.max(...cluster.map((cell) => cell.right));
+      const clusterOverlap = Math.max(
+        0,
+        Math.min(clusterRight, caption.right) -
+          Math.max(clusterLeft, caption.left),
+      );
+      if (!bestCluster) {
+        return cluster;
+      }
 
-    const bestLeft = Math.min(...bestCluster.map((cell) => cell.left));
-    const bestRight = Math.max(...bestCluster.map((cell) => cell.right));
-    const bestOverlap = Math.max(
-      0,
-      Math.min(bestRight, caption.right) - Math.max(bestLeft, caption.left),
-    );
-    return clusterOverlap > bestOverlap ? cluster : bestCluster;
-  }, undefined);
+      const bestLeft = Math.min(...bestCluster.map((cell) => cell.left));
+      const bestRight = Math.max(...bestCluster.map((cell) => cell.right));
+      const bestOverlap = Math.max(
+        0,
+        Math.min(bestRight, caption.right) - Math.max(bestLeft, caption.left),
+      );
+      return clusterOverlap > bestOverlap ? cluster : bestCluster;
+    },
+    undefined,
+  );
 }
 
 function rowsLookCompatible(left: TableLikeRow, right: TableLikeRow): boolean {
@@ -999,7 +1024,8 @@ function normalizeDetectedTableRows(rows: TableLikeRow[]): string[][] {
     return [];
   }
 
-  const templateRow = rows.find((row) => row.cells.length === columnCount) ?? rows[0];
+  const templateRow =
+    rows.find((row) => row.cells.length === columnCount) ?? rows[0];
   const anchors = templateRow.cells.map((cell) => cell.centerX);
   const structuredRows = rows
     .map((row) =>
