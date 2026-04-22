@@ -26,6 +26,11 @@ interface TableLikeRow extends LocalRect {
   cells: StructuredCell[];
 }
 
+interface TableCaptionAnchor extends LocalRect {
+  centerY: number;
+  text: string;
+}
+
 interface StructuredSelectionResult {
   rows: string[][];
   selectionRectCount?: number;
@@ -50,6 +55,7 @@ let rememberedReaderSelection: RememberedReaderSelection | undefined;
 
 const MIN_TABLE_COLUMNS = 2;
 const MIN_TABLE_ROWS = 2;
+const TABLE_CAPTION_PATTERN = /^table\s+\d+[\.:]?\s+\S+/i;
 
 export function hydrateSelectionAnnotationText(
   reader: any,
@@ -199,9 +205,15 @@ export function detectTableDraftsFromPageEntries({
 }): TableSelectionDraft[] {
   const rows = buildTableRows(entries);
   const rowBlocks = collectTableRowBlocks(rows);
+  const captionAnchors = collectTableCaptionAnchors(rows);
+  const captionedBlocks = matchCaptionAnchorsToRowBlocks(
+    captionAnchors,
+    rowBlocks,
+  );
 
-  return rowBlocks.flatMap((rowBlock, blockIndex) => {
-    const structuredRows = normalizeDetectedTableRows(rowBlock);
+  return captionedBlocks.flatMap(({ rowBlock, caption }, blockIndex) => {
+    const captionAlignedBlock = clipRowBlockToCaptionLane(rowBlock, caption);
+    const structuredRows = normalizeDetectedTableRows(captionAlignedBlock);
     if (!structuredRows.length) {
       return [];
     }
@@ -231,6 +243,7 @@ export function detectTableDraftsFromPageEntries({
               cols: Math.max(...structuredRows.map((row) => row.length)),
             },
           }),
+          `caption=${caption.text}`,
         ],
       },
     ];
@@ -725,6 +738,221 @@ function collectTableRowBlocks(rows: TableLikeRow[]): TableLikeRow[][] {
   return rowBlocks;
 }
 
+function collectTableCaptionAnchors(rows: TableLikeRow[]): TableCaptionAnchor[] {
+  return rows.flatMap((row) =>
+    row.cells.flatMap((cell) => {
+      const captionText = cell.text.replace(/\s+/g, " ").trim();
+      if (!TABLE_CAPTION_PATTERN.test(captionText)) {
+        return [];
+      }
+
+      return [
+        {
+          text: captionText,
+          left: cell.left,
+          top: cell.top,
+          right: cell.right,
+          bottom: cell.bottom,
+          centerY: row.centerY,
+        } satisfies TableCaptionAnchor,
+      ];
+    }),
+  );
+}
+
+function matchCaptionAnchorsToRowBlocks(
+  captionAnchors: TableCaptionAnchor[],
+  rowBlocks: TableLikeRow[][],
+): Array<{ rowBlock: TableLikeRow[]; caption: TableCaptionAnchor }> {
+  if (!captionAnchors.length || !rowBlocks.length) {
+    return [];
+  }
+
+  const usedBlocks = new Set<number>();
+
+  return captionAnchors.flatMap((caption, captionIndex) => {
+    const nextCaption = captionAnchors[captionIndex + 1];
+    const matchedBlockIndex = rowBlocks.findIndex((rowBlock, rowBlockIndex) => {
+      if (usedBlocks.has(rowBlockIndex)) {
+        return false;
+      }
+
+      return isRowBlockAnchoredByCaption(rowBlock, caption, nextCaption);
+    });
+
+    if (matchedBlockIndex < 0) {
+      return [];
+    }
+
+    usedBlocks.add(matchedBlockIndex);
+    return [{ rowBlock: rowBlocks[matchedBlockIndex], caption }];
+  });
+}
+
+function isRowBlockAnchoredByCaption(
+  rowBlock: TableLikeRow[],
+  caption: TableCaptionAnchor,
+  nextCaption?: TableCaptionAnchor,
+): boolean {
+  const firstRow = rowBlock[0];
+  if (!firstRow) {
+    return false;
+  }
+
+  const blockLeft = Math.min(...rowBlock.map((row) => row.left));
+  const blockRight = Math.max(...rowBlock.map((row) => row.right));
+  const blockTopRow = Math.max(...rowBlock.map((row) => row.bottom));
+  const verticalGap = caption.top - blockTopRow;
+  const maxVerticalGap = Math.max(72, (caption.bottom - caption.top) * 12);
+
+  if (verticalGap < -6 || verticalGap > maxVerticalGap) {
+    return false;
+  }
+
+  if (!rangesOverlap(caption.left, caption.right, blockLeft, blockRight, 24)) {
+    return false;
+  }
+
+  if (
+    nextCaption &&
+    rangesOverlap(caption.left, caption.right, nextCaption.left, nextCaption.right, 24) &&
+    firstRow.centerY <= nextCaption.centerY
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function clipRowBlockToCaptionLane(
+  rowBlock: TableLikeRow[],
+  caption: TableCaptionAnchor,
+): TableLikeRow[] {
+  if (!rowBlock.length) {
+    return [];
+  }
+
+  const blockLeft = Math.min(...rowBlock.map((row) => row.left));
+  const blockRight = Math.max(...rowBlock.map((row) => row.right));
+  const blockMidpoint = (blockLeft + blockRight) / 2;
+  const captionMode =
+    caption.left > blockMidpoint
+      ? "right"
+      : caption.right < blockMidpoint
+        ? "left"
+        : "overlap";
+
+  return rowBlock
+    .map((row) => {
+      const cellClusters = splitCellsIntoHorizontalClusters(row.cells);
+      const selectedCluster = selectClusterForCaption(
+        cellClusters,
+        caption,
+        captionMode,
+      );
+      const cells = selectedCluster ?? row.cells;
+
+      if (!cells.length) {
+        return undefined;
+      }
+
+      return {
+        left: Math.min(...cells.map((cell) => cell.left)),
+        top: Math.min(...cells.map((cell) => cell.top)),
+        right: Math.max(...cells.map((cell) => cell.right)),
+        bottom: Math.max(...cells.map((cell) => cell.bottom)),
+        centerY: row.centerY,
+        cells,
+      } satisfies TableLikeRow;
+    })
+    .filter((row): row is TableLikeRow => Boolean(row));
+}
+
+function splitCellsIntoHorizontalClusters(
+  cells: StructuredCell[],
+): StructuredCell[][] {
+  if (!cells.length) {
+    return [];
+  }
+
+  const sortedCells = [...cells].sort((left, right) => left.left - right.left);
+  const positiveGaps = sortedCells
+    .slice(1)
+    .map((cell, index) => cell.left - sortedCells[index].right)
+    .filter((gap) => gap > 0);
+  const gapThreshold = positiveGaps.length
+    ? Math.max(36, getMedian(positiveGaps) * 2.5)
+    : Number.POSITIVE_INFINITY;
+  const clusters: StructuredCell[][] = [];
+  let currentCluster: StructuredCell[] = [];
+
+  for (const cell of sortedCells) {
+    const lastCell = currentCluster.at(-1);
+    if (!lastCell || cell.left - lastCell.right <= gapThreshold) {
+      currentCluster.push(cell);
+      continue;
+    }
+
+    clusters.push(currentCluster);
+    currentCluster = [cell];
+  }
+
+  if (currentCluster.length) {
+    clusters.push(currentCluster);
+  }
+
+  return clusters;
+}
+
+function selectClusterForCaption(
+  cellClusters: StructuredCell[][],
+  caption: TableCaptionAnchor,
+  captionMode: "left" | "right" | "overlap",
+): StructuredCell[] | undefined {
+  if (!cellClusters.length) {
+    return undefined;
+  }
+
+  if (cellClusters.length === 1) {
+    return cellClusters[0];
+  }
+
+  if (captionMode === "right") {
+    return [...cellClusters]
+      .reverse()
+      .find(
+        (cluster) =>
+          (cluster.at(-1)?.right ?? Number.NEGATIVE_INFINITY) >= caption.left - 24,
+      );
+  }
+
+  if (captionMode === "left") {
+    return cellClusters.find(
+      (cluster) => (cluster[0]?.left ?? Number.POSITIVE_INFINITY) <= caption.right + 24,
+    );
+  }
+
+  return cellClusters.reduce<StructuredCell[] | undefined>((bestCluster, cluster) => {
+    const clusterLeft = Math.min(...cluster.map((cell) => cell.left));
+    const clusterRight = Math.max(...cluster.map((cell) => cell.right));
+    const clusterOverlap = Math.max(
+      0,
+      Math.min(clusterRight, caption.right) - Math.max(clusterLeft, caption.left),
+    );
+    if (!bestCluster) {
+      return cluster;
+    }
+
+    const bestLeft = Math.min(...bestCluster.map((cell) => cell.left));
+    const bestRight = Math.max(...bestCluster.map((cell) => cell.right));
+    const bestOverlap = Math.max(
+      0,
+      Math.min(bestRight, caption.right) - Math.max(bestLeft, caption.left),
+    );
+    return clusterOverlap > bestOverlap ? cluster : bestCluster;
+  }, undefined);
+}
+
 function rowsLookCompatible(left: TableLikeRow, right: TableLikeRow): boolean {
   if (!left.cells.length || !right.cells.length) {
     return false;
@@ -740,6 +968,25 @@ function rowsLookCompatible(left: TableLikeRow, right: TableLikeRow): boolean {
     leftEnd >= rightStart - 24 &&
     rightEnd >= leftStart - 24
   );
+}
+
+function getRowText(row: TableLikeRow): string {
+  return row.cells
+    .map((cell) => cell.text.trim())
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function rangesOverlap(
+  leftStart: number,
+  leftEnd: number,
+  rightStart: number,
+  rightEnd: number,
+  tolerance = 0,
+): boolean {
+  return leftEnd >= rightStart - tolerance && rightEnd >= leftStart - tolerance;
 }
 
 function normalizeDetectedTableRows(rows: TableLikeRow[]): string[][] {

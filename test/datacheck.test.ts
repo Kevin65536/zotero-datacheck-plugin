@@ -381,7 +381,13 @@ describe("datacheck", function () {
 
     it("finds multiple table regions from full-page text geometry", function () {
       const pageEntries: PageTextEntry[] = [
-        createPageEntry("Participant characteristics", 10, 242, 170, 252),
+        createPageEntry(
+          "Table 1. Participant characteristics.",
+          10,
+          242,
+          190,
+          252,
+        ),
         createPageEntry("Group", 10, 220, 50, 230),
         createPageEntry("N", 90, 220, 110, 230),
         createPageEntry("Rate", 150, 220, 190, 230),
@@ -391,7 +397,7 @@ describe("datacheck", function () {
         createPageEntry("Treatment", 10, 180, 74, 190),
         createPageEntry("12", 92, 180, 106, 190),
         createPageEntry("30%", 150, 180, 180, 190),
-        createPageEntry("Follow-up outcomes", 10, 142, 144, 152),
+        createPageEntry("Table 2. Follow-up outcomes.", 10, 142, 164, 152),
         createPageEntry("Visit", 10, 120, 46, 130),
         createPageEntry("p", 90, 120, 102, 130),
         createPageEntry("Result", 150, 120, 190, 130),
@@ -426,7 +432,32 @@ describe("datacheck", function () {
         ["Week 2", "0.20", "Review"],
       ]);
       assert.isAbove(drafts[0].selectedTextLength, 0);
-      assert.lengthOf(drafts[1].extractionDiagnostics ?? [], 1);
+      assert.include(drafts[1].extractionDiagnostics ?? [], "caption=Table 2. Follow-up outcomes.");
+    });
+
+    it("ignores captionless multi-column blocks during full-page scans", function () {
+      const pageEntries: PageTextEntry[] = [
+        createPageEntry("Group", 10, 220, 50, 230),
+        createPageEntry("N", 90, 220, 110, 230),
+        createPageEntry("Rate", 150, 220, 190, 230),
+        createPageEntry("Control", 10, 200, 60, 210),
+        createPageEntry("10", 92, 200, 106, 210),
+        createPageEntry("25%", 150, 200, 180, 210),
+        createPageEntry("Treatment", 10, 180, 74, 190),
+        createPageEntry("12", 92, 180, 106, 190),
+        createPageEntry("30%", 150, 180, 180, 190),
+      ];
+
+      const drafts = detectTableDraftsFromPageEntries({
+        attachmentID: 1,
+        attachmentKey: "ABCD1234",
+        itemTitle: "Captionless block",
+        pageNumber: 5,
+        capturedAt: "2026-04-22T10:00:00.000Z",
+        entries: pageEntries,
+      });
+
+      assert.lengthOf(drafts, 0);
     });
 
     it("detects compact academic tables with narrow inter-column gaps", function () {
@@ -535,6 +566,11 @@ describe("datacheck", function () {
         }
         const debugSummary = formatDebugSummary(debugResult);
         const rawSummary = await inspectReaderTextAccess(reader, 1);
+        const draftSummary = scanResult.tableDrafts.length
+          ? scanResult.tableDrafts
+              .map((draft, index) => describeDraft(draft, index))
+              .join("\n")
+          : "  <no tables detected>";
 
         const filePath = await attachment.getFilePathAsync();
         logRealPdfScanResult({
@@ -549,7 +585,7 @@ describe("datacheck", function () {
         assert.isAtLeast(
           scanResult.tableDrafts.length,
           REAL_PDF_MIN_TABLES,
-          `Expected at least ${REAL_PDF_MIN_TABLES} table(s) for ${scanResult.itemTitle}, got ${scanResult.tableDrafts.length}. Diagnostics: ${scanResult.diagnostics.join(" | ")}\n${debugSummary}\n${rawSummary}`,
+          `Expected at least ${REAL_PDF_MIN_TABLES} table(s) for ${scanResult.itemTitle}, got ${scanResult.tableDrafts.length}. Diagnostics: ${scanResult.diagnostics.join(" | ")}\n${draftSummary}\n${debugSummary}\n${rawSummary}`,
         );
 
         const maxColumnCount = scanResult.tableDrafts.reduce(
@@ -565,7 +601,7 @@ describe("datacheck", function () {
         assert.isAtLeast(
           maxColumnCount,
           REAL_PDF_MIN_COLUMNS,
-          `Expected at least ${REAL_PDF_MIN_COLUMNS} detected columns for ${scanResult.itemTitle}, got ${maxColumnCount}. Diagnostics: ${scanResult.diagnostics.join(" | ")}\n${debugSummary}\n${rawSummary}`,
+          `Expected at least ${REAL_PDF_MIN_COLUMNS} detected columns for ${scanResult.itemTitle}, got ${maxColumnCount}. Diagnostics: ${scanResult.diagnostics.join(" | ")}\n${draftSummary}\n${debugSummary}\n${rawSummary}`,
         );
       } finally {
         try {
