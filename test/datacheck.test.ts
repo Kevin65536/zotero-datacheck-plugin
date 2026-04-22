@@ -6,10 +6,30 @@ import {
   renderSelectionPopupAnalyzeAction,
 } from "../src/modules/datacheck/commands";
 import {
+  debugScanActiveReaderForTables,
+  detectTableDraftsFromPageEntries,
+  scanActiveReaderForTables,
+} from "../src/modules/datacheck/reader";
+import {
   parseNumericValue,
   parseTableSelection,
 } from "../src/modules/datacheck/parser";
-import type { TableSelectionDraft } from "../src/modules/datacheck/types";
+import type {
+  PageTextEntry,
+  TableSelectionDraft,
+} from "../src/modules/datacheck/types";
+
+const REAL_PDF_TITLE_QUERY = readTestEnv(
+  "ZOTERO_PLUGIN_TEST_PDF_TITLE_QUERY",
+);
+const REAL_PDF_MIN_TABLES = readPositiveIntEnv(
+  "ZOTERO_PLUGIN_TEST_PDF_MIN_TABLES",
+  1,
+);
+const REAL_PDF_MIN_COLUMNS = readPositiveIntEnv(
+  "ZOTERO_PLUGIN_TEST_PDF_MIN_COLUMNS",
+  4,
+);
 
 function createDraft(
   selectedText: string,
@@ -26,6 +46,284 @@ function createDraft(
     capturedAt: "2026-04-17T09:00:00.000Z",
     ...overrides,
   };
+}
+
+function createPageEntry(
+  text: string,
+  left: number,
+  top: number,
+  right: number,
+  bottom: number,
+): PageTextEntry {
+  return {
+    text,
+    left,
+    top,
+    right,
+    bottom,
+    centerX: (left + right) / 2,
+    centerY: (top + bottom) / 2,
+  };
+}
+
+function readTestEnv(name: string): string | undefined {
+  const nodeValue =
+    typeof process !== "undefined" ? process?.env?.[name]?.trim() : undefined;
+  if (nodeValue) {
+    return nodeValue;
+  }
+
+  const geckoValue = (globalThis as any).Services?.env?.get?.(name);
+  return typeof geckoValue === "string" && geckoValue.trim()
+    ? geckoValue.trim()
+    : undefined;
+}
+
+function readPositiveIntEnv(name: string, fallbackValue: number): number {
+  const rawValue = readTestEnv(name);
+  const parsedValue = rawValue ? Number.parseInt(rawValue, 10) : Number.NaN;
+  return Number.isFinite(parsedValue) && parsedValue > 0
+    ? parsedValue
+    : fallbackValue;
+}
+
+function formatPreviewRow(row: string[] | undefined): string {
+  if (!row?.length) {
+    return "<empty>";
+  }
+
+  return row
+    .map((cell) => cell.trim())
+    .slice(0, 8)
+    .join(" | ");
+}
+
+function describeDraft(draft: TableSelectionDraft, index: number): string {
+  const rowCount = draft.structuredRows?.length ?? 0;
+  const columnCount = Math.max(
+    ...(draft.structuredRows?.map((row) => row.length) ?? [0]),
+  );
+  const preview = formatPreviewRow(draft.structuredRows?.[0]);
+  const diagnostics = (draft.extractionDiagnostics ?? []).join(" || ") || "<none>";
+
+  return [
+    `  [table ${index + 1}] page=${draft.pageNumber ?? "?"} rows=${rowCount} cols=${columnCount}`,
+    `    preview=${preview}`,
+    `    diagnostics=${diagnostics}`,
+  ].join("\n");
+}
+
+function formatDebugSummary(
+  debugResult: NonNullable<Awaited<ReturnType<typeof debugScanActiveReaderForTables>>>,
+): string {
+  const zeroEntryPages = debugResult.pages.filter(
+    (page) => page.entryCount === 0,
+  ).length;
+  const pageLines = debugResult.pages
+    .slice(0, 12)
+    .map((page) => {
+      const blockPreview = page.blockSummaries.length
+        ? page.blockSummaries
+            .map(
+              (block, index) =>
+                `#${index + 1}:${block.rowCount}r/${block.maxColumnCount}c:${block.preview}`,
+            )
+            .join(" || ")
+        : "<none>";
+      return `  [page ${page.pageNumber}] entries=${page.entryCount} rows=${page.rowCount} rowBlocks=${page.rowBlockCount} detectedTables=${page.detectedTableCount} maxCells=${page.maxCellsInRow} maxDetectedCols=${page.maxDetectedColumnCount}\n    preview=${page.textPreview || "<empty>"}\n    blocks=${blockPreview}`;
+    })
+    .join("\n");
+
+  return [
+    `debug.pages=${debugResult.pageCount}`,
+    `debug.diagnostics=${debugResult.diagnostics.join(" || ") || "<none>"}`,
+    `debug.zeroEntryPages=${zeroEntryPages}`,
+    pageLines || "  <no page summaries>",
+  ].join("\n");
+}
+
+async function inspectReaderTextAccess(
+  reader: any,
+  pageNumber: number,
+): Promise<string> {
+  try {
+    const pdfDocument = getReaderPdfDocumentForTest(reader);
+    if (!pdfDocument?.getPage) {
+      return `raw.page=${pageNumber} direct=<no-pdfDocument>`;
+    }
+
+    const pdfPage = await pdfDocument.getPage(pageNumber);
+    const directTextContent = await pdfPage?.getTextContent?.();
+    const directItems = Array.from(
+      ((directTextContent as any)?.items ?? []) as ArrayLike<any>,
+    );
+    const directKeys = directTextContent
+      ? Object.keys(directTextContent as Record<string, unknown>).join(",")
+      : "<none>";
+    const directStylesCount = directTextContent?.styles
+      ? Object.keys(directTextContent.styles).length
+      : 0;
+
+    const iframeWindow = reader?._iframeWindow?.wrappedJSObject ?? reader?._iframeWindow;
+    const pageView = iframeWindow?.PDFViewerApplication?.pdfViewer?.getPageView?.(
+      pageNumber - 1,
+    );
+    const textLayerDiv =
+      pageView?.textLayer?.div ??
+      pageView?.div?.querySelector?.(".textLayer") ??
+      null;
+    const spanElements = textLayerDiv
+      ? Array.from(textLayerDiv.querySelectorAll("span"))
+      : [];
+    const spanPreview = spanElements
+      .map((element: any) => element?.textContent?.trim?.() ?? "")
+      .filter(Boolean)
+      .slice(0, 8)
+      .join(" | ");
+
+    let contentRealmSummary = "<unavailable>";
+    try {
+      const runner = iframeWindow?.Function?.(
+        `return (async function(pageNumber) {
+          const app = this.PDFViewerApplication;
+          const pdfDocument = app?.pdfDocument;
+          if (!pdfDocument?.getPage) {
+            return { error: "no-pdfDocument" };
+          }
+
+          const pdfPage = await pdfDocument.getPage(pageNumber);
+          const textContent = await pdfPage.getTextContent();
+          const items = Array.from(textContent?.items ?? []);
+          return {
+            keys: textContent ? Object.keys(textContent) : [],
+            itemsLength: items.length,
+            firstStr: items[0]?.str ?? "",
+            stylesCount: textContent?.styles ? Object.keys(textContent.styles).length : 0,
+          };
+        }).apply(this, arguments);`,
+      );
+      const realmResult = runner ? await runner.call(iframeWindow, pageNumber) : undefined;
+      if (realmResult?.error) {
+        contentRealmSummary = `error=${realmResult.error}`;
+      } else if (realmResult) {
+        contentRealmSummary = `items=${realmResult.itemsLength ?? "?"} first=${realmResult.firstStr || "<empty>"} keys=${(realmResult.keys ?? []).join(",")} styles=${realmResult.stylesCount ?? 0}`;
+      }
+    } catch (error) {
+      contentRealmSummary = `error=${error instanceof Error ? error.message : String(error)}`;
+    }
+
+    return [
+      `raw.page=${pageNumber}`,
+      `direct.keys=${directKeys}`,
+      `direct.items=${directItems.length}`,
+      `direct.first=${directItems[0]?.str ?? "<empty>"}`,
+      `direct.styles=${directStylesCount}`,
+      `textLayer.spans=${spanElements.length}`,
+      `textLayer.preview=${spanPreview || "<empty>"}`,
+      `contentRealm.${contentRealmSummary}`,
+    ].join("\n");
+  } catch (error) {
+    return `raw.page=${pageNumber} error=${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+function logRealPdfScanResult(params: {
+  query: string;
+  attachment: Zotero.Item;
+  filePath: string | false;
+  scanResult: NonNullable<Awaited<ReturnType<typeof scanActiveReaderForTables>>>;
+  debugSummary: string;
+  rawSummary: string;
+}) {
+  const { query, attachment, filePath, scanResult, debugSummary, rawSummary } =
+    params;
+  const draftDescriptions = scanResult.tableDrafts.length
+    ? scanResult.tableDrafts
+        .map((draft, index) => describeDraft(draft, index))
+        .join("\n")
+    : "  <no tables detected>";
+  const diagnostics = scanResult.diagnostics.length
+    ? scanResult.diagnostics.join(" || ")
+    : "<none>";
+
+  console.info(
+    [
+      `[real-pdf] query=${query}`,
+      `[real-pdf] attachment=${attachment.getField("title", false, true)} (${attachment.key})`,
+      `[real-pdf] item=${scanResult.itemTitle}`,
+      `[real-pdf] path=${filePath || "<unavailable>"}`,
+      `[real-pdf] pages=${scanResult.pageCount} tables=${scanResult.tableDrafts.length}`,
+      `[real-pdf] diagnostics=${diagnostics}`,
+      draftDescriptions,
+      debugSummary,
+      rawSummary,
+    ].join("\n"),
+  );
+}
+
+function getReaderPdfDocumentForTest(reader: any): any {
+  return (
+    reader?._iframeWindow?.wrappedJSObject?.PDFViewerApplication?.pdfDocument ??
+    reader?._iframeWindow?.PDFViewerApplication?.pdfDocument
+  );
+}
+
+async function waitForReaderPdfDocument(
+  reader: any,
+  timeoutMs = 30000,
+  intervalMs = 250,
+): Promise<any> {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const pdfDocument = getReaderPdfDocumentForTest(reader);
+    if (pdfDocument?.getPage && Number.isFinite(Number(pdfDocument.numPages))) {
+      return pdfDocument;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  return getReaderPdfDocumentForTest(reader);
+}
+
+async function findPdfAttachmentByQuery(
+  query: string,
+): Promise<Zotero.Item | undefined> {
+  const loweredQuery = query.toLowerCase();
+  const libraryID = Zotero.Libraries.userLibraryID;
+  const items = await Zotero.Items.getAll(libraryID, false, false);
+  const parentTitleCache = new Map<number, string>();
+
+  for (const item of items) {
+    if (!item.isPDFAttachment()) {
+      continue;
+    }
+
+    const attachmentTitle = item.getField("title", false, true).toLowerCase();
+    let parentTitle = "";
+
+    if (item.parentID) {
+      if (!parentTitleCache.has(item.parentID)) {
+        const parentItem = (await Zotero.Items.getAsync(item.parentID)) as Zotero.Item;
+        parentTitleCache.set(
+          item.parentID,
+          parentItem.getField("title", false, true).toLowerCase(),
+        );
+      }
+
+      parentTitle = parentTitleCache.get(item.parentID) ?? "";
+    }
+
+    if (
+      attachmentTitle.includes(loweredQuery) ||
+      parentTitle.includes(loweredQuery)
+    ) {
+      return item;
+    }
+  }
+
+  return undefined;
 }
 
 describe("datacheck", function () {
@@ -79,6 +377,203 @@ describe("datacheck", function () {
         table.reconstructionWarnings,
         "structured-selection-ready",
       );
+    });
+
+    it("finds multiple table regions from full-page text geometry", function () {
+      const pageEntries: PageTextEntry[] = [
+        createPageEntry("Participant characteristics", 10, 242, 170, 252),
+        createPageEntry("Group", 10, 220, 50, 230),
+        createPageEntry("N", 90, 220, 110, 230),
+        createPageEntry("Rate", 150, 220, 190, 230),
+        createPageEntry("Control", 10, 200, 60, 210),
+        createPageEntry("10", 92, 200, 106, 210),
+        createPageEntry("25%", 150, 200, 180, 210),
+        createPageEntry("Treatment", 10, 180, 74, 190),
+        createPageEntry("12", 92, 180, 106, 190),
+        createPageEntry("30%", 150, 180, 180, 190),
+        createPageEntry("Follow-up outcomes", 10, 142, 144, 152),
+        createPageEntry("Visit", 10, 120, 46, 130),
+        createPageEntry("p", 90, 120, 102, 130),
+        createPageEntry("Result", 150, 120, 190, 130),
+        createPageEntry("Week 1", 10, 100, 54, 110),
+        createPageEntry("0.04", 90, 100, 118, 110),
+        createPageEntry("Pass", 150, 100, 180, 110),
+        createPageEntry("Week 2", 10, 80, 54, 90),
+        createPageEntry("0.20", 90, 80, 118, 90),
+        createPageEntry("Review", 150, 80, 192, 90),
+      ];
+
+      const drafts = detectTableDraftsFromPageEntries({
+        attachmentID: 1,
+        attachmentKey: "ABCD1234",
+        itemTitle: "Synthetic page",
+        pageNumber: 5,
+        capturedAt: "2026-04-22T10:00:00.000Z",
+        entries: pageEntries,
+      });
+
+      assert.lengthOf(drafts, 2);
+      assert.equal(drafts[0].source, "reader-pdf-table-scan");
+      assert.equal(drafts[0].pageNumber, 5);
+      assert.deepEqual(drafts[0].structuredRows, [
+        ["Group", "N", "Rate"],
+        ["Control", "10", "25%"],
+        ["Treatment", "12", "30%"],
+      ]);
+      assert.deepEqual(drafts[1].structuredRows, [
+        ["Visit", "p", "Result"],
+        ["Week 1", "0.04", "Pass"],
+        ["Week 2", "0.20", "Review"],
+      ]);
+      assert.isAbove(drafts[0].selectedTextLength, 0);
+      assert.lengthOf(drafts[1].extractionDiagnostics ?? [], 1);
+    });
+
+    it("detects compact academic tables with narrow inter-column gaps", function () {
+      const pageEntries: PageTextEntry[] = [
+        createPageEntry(
+          "Table 3. Evaluation on multimodal understanding benchmarks.",
+          10,
+          248,
+          310,
+          258,
+        ),
+        createPageEntry("Method", 10, 220, 38, 230),
+        createPageEntry("Params", 44, 220, 68, 230),
+        createPageEntry("Res.", 74, 220, 92, 230),
+        createPageEntry("SEEDB", 98, 220, 124, 230),
+        createPageEntry("MMV", 130, 220, 150, 230),
+        createPageEntry("Avg.", 156, 220, 178, 230),
+        createPageEntry("TokenFlow-B", 10, 202, 40, 212),
+        createPageEntry("7B", 44, 202, 52, 212),
+        createPageEntry("224", 74, 202, 88, 212),
+        createPageEntry("60.4", 98, 202, 116, 212),
+        createPageEntry("22.4", 130, 202, 148, 212),
+        createPageEntry("55.2", 156, 202, 174, 212),
+        createPageEntry("TokenFlow-XL", 10, 184, 40, 194),
+        createPageEntry("14B", 44, 184, 56, 194),
+        createPageEntry("384", 74, 184, 88, 194),
+        createPageEntry("72.6", 98, 184, 116, 194),
+        createPageEntry("48.2", 130, 184, 148, 194),
+        createPageEntry("67.4", 156, 184, 174, 194),
+        createPageEntry(
+          "Our approach demonstrates superior performance while maintaining efficiency.",
+          10,
+          146,
+          320,
+          156,
+        ),
+      ];
+
+      const drafts = detectTableDraftsFromPageEntries({
+        attachmentID: 1,
+        attachmentKey: "ABCD1234",
+        itemTitle: "Compact academic table",
+        pageNumber: 3,
+        capturedAt: "2026-04-22T13:00:00.000Z",
+        entries: pageEntries,
+      });
+
+      assert.lengthOf(drafts, 1);
+      assert.deepEqual(drafts[0].structuredRows, [
+        ["Method", "Params", "Res.", "SEEDB", "MMV", "Avg."],
+        ["TokenFlow-B", "7B", "224", "60.4", "22.4", "55.2"],
+        ["TokenFlow-XL", "14B", "384", "72.6", "48.2", "67.4"],
+      ]);
+    });
+
+    it("can regression-test a configured real PDF through the reader pipeline", async function () {
+      if (!REAL_PDF_TITLE_QUERY) {
+        this.skip();
+      }
+
+      this.timeout(120000);
+
+      const attachment = await findPdfAttachmentByQuery(REAL_PDF_TITLE_QUERY);
+      assert.isOk(
+        attachment,
+        `No PDF attachment matched ZOTERO_PLUGIN_TEST_PDF_TITLE_QUERY=${REAL_PDF_TITLE_QUERY}`,
+      );
+      if (!attachment) {
+        return;
+      }
+
+      let reader: any;
+      try {
+        reader = await Zotero.Reader.open(attachment.id, undefined, {
+          allowDuplicate: true,
+        });
+        assert.isOk(
+          reader,
+          `Zotero.Reader.open did not return a reader for attachment ${attachment.key}`,
+        );
+        if (!reader) {
+          return;
+        }
+
+        if (typeof reader._waitForReader === "function") {
+          await reader._waitForReader();
+        } else if (reader._initPromise) {
+          await reader._initPromise;
+        }
+
+        const pdfDocument = await waitForReaderPdfDocument(reader);
+        assert.isOk(
+          pdfDocument?.getPage,
+          `PDF document was not ready for attachment ${attachment.key} after waiting`,
+        );
+
+        const scanResult = await scanActiveReaderForTables(reader);
+        assert.isOk(scanResult, "scanActiveReaderForTables returned null");
+        if (!scanResult) {
+          return;
+        }
+        const debugResult = await debugScanActiveReaderForTables(reader);
+        assert.isOk(debugResult, "debugScanActiveReaderForTables returned null");
+        if (!debugResult) {
+          return;
+        }
+        const debugSummary = formatDebugSummary(debugResult);
+        const rawSummary = await inspectReaderTextAccess(reader, 1);
+
+        const filePath = await attachment.getFilePathAsync();
+        logRealPdfScanResult({
+          query: REAL_PDF_TITLE_QUERY,
+          attachment,
+          filePath,
+          scanResult,
+          debugSummary,
+          rawSummary,
+        });
+
+        assert.isAtLeast(
+          scanResult.tableDrafts.length,
+          REAL_PDF_MIN_TABLES,
+          `Expected at least ${REAL_PDF_MIN_TABLES} table(s) for ${scanResult.itemTitle}, got ${scanResult.tableDrafts.length}. Diagnostics: ${scanResult.diagnostics.join(" | ")}\n${debugSummary}\n${rawSummary}`,
+        );
+
+        const maxColumnCount = scanResult.tableDrafts.reduce(
+          (maxValue, draft) => {
+            const columnCount = Math.max(
+              ...(draft.structuredRows?.map((row) => row.length) ?? [0]),
+            );
+            return Math.max(maxValue, columnCount);
+          },
+          0,
+        );
+
+        assert.isAtLeast(
+          maxColumnCount,
+          REAL_PDF_MIN_COLUMNS,
+          `Expected at least ${REAL_PDF_MIN_COLUMNS} detected columns for ${scanResult.itemTitle}, got ${maxColumnCount}. Diagnostics: ${scanResult.diagnostics.join(" | ")}\n${debugSummary}\n${rawSummary}`,
+        );
+      } finally {
+        try {
+          reader?.close?.();
+        } catch {
+          // Ignore cleanup failures in optional local regression tests.
+        }
+      }
     });
   });
 

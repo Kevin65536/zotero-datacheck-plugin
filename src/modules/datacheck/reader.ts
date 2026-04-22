@@ -1,4 +1,10 @@
-import type { ReaderAuditContext, TableSelectionDraft } from "./types";
+import type {
+  PageTextEntry,
+  ReaderAuditContext,
+  ReaderTableScanDebugResult,
+  ReaderTableScanResult,
+  TableSelectionDraft,
+} from "./types";
 import { getString } from "../../utils/locale";
 
 interface LocalRect {
@@ -8,15 +14,16 @@ interface LocalRect {
   bottom: number;
 }
 
-interface SelectionTextEntry extends LocalRect {
-  text: string;
-  centerX: number;
-  centerY: number;
-}
+type SelectionTextEntry = PageTextEntry;
 
 interface StructuredCell extends LocalRect {
   text: string;
   centerX: number;
+}
+
+interface TableLikeRow extends LocalRect {
+  centerY: number;
+  cells: StructuredCell[];
 }
 
 interface StructuredSelectionResult {
@@ -40,6 +47,9 @@ interface RememberedReaderSelection {
 }
 
 let rememberedReaderSelection: RememberedReaderSelection | undefined;
+
+const MIN_TABLE_COLUMNS = 2;
+const MIN_TABLE_ROWS = 2;
 
 export function hydrateSelectionAnnotationText(
   reader: any,
@@ -86,27 +96,27 @@ export function rememberReaderSelection(
   };
 }
 
-export async function getActiveReaderContext(): Promise<ReaderAuditContext | null> {
+function getActiveReader(): any | null {
   const tabs = ztoolkit.getGlobal("Zotero_Tabs") as any;
   const selectedTabID = tabs?.selectedID;
   if (!selectedTabID) {
     return null;
   }
 
-  const reader = Zotero.Reader.getByTabID(selectedTabID) as any;
+  return (Zotero.Reader.getByTabID(selectedTabID) as any) ?? null;
+}
+
+export async function getActiveReaderContext(): Promise<ReaderAuditContext | null> {
+  const reader = getActiveReader();
   if (!reader?.itemID) {
     return null;
   }
 
-  const attachment = (await Zotero.Items.getAsync(
-    reader.itemID,
-  )) as Zotero.Item;
-  const parentItem = attachment.parentID
-    ? ((await Zotero.Items.getAsync(attachment.parentID)) as Zotero.Item)
-    : undefined;
+  const { attachmentID, attachmentKey, itemTitle } =
+    await getReaderAttachmentMetadata(reader);
 
   const rememberedSelection =
-    rememberedReaderSelection?.tabID === selectedTabID
+    rememberedReaderSelection?.tabID === reader.tabID
       ? rememberedReaderSelection
       : undefined;
   const liveSelectionAnnotation = getSelectionAnnotation(reader);
@@ -136,21 +146,11 @@ export async function getActiveReaderContext(): Promise<ReaderAuditContext | nul
       .join("\n");
   }
 
-  const currentPageNumber = Number(
-    reader?._iframeWindow?.wrappedJSObject?.PDFViewerApplication?.pdfViewer
-      ?.currentPageNumber,
-  );
-
   return {
-    attachmentID: attachment.id,
-    attachmentKey: attachment.key,
-    itemTitle:
-      (parentItem?.getField("title", false, true) as string) ||
-      (attachment.getField("title", false, true) as string) ||
-      attachment.key,
-    pageNumber: Number.isFinite(currentPageNumber)
-      ? currentPageNumber
-      : undefined,
+    attachmentID,
+    attachmentKey,
+    itemTitle,
+    pageNumber: getReaderCurrentPageNumber(reader),
     selectedText,
     selectedTextLength: selectedText.trim().length,
     capturedAt: new Date().toISOString(),
@@ -180,6 +180,592 @@ export function createTableSelectionDraft(
     selectionRectCount: context.selectionRectCount,
     extractionDiagnostics: context.extractionDiagnostics,
   };
+}
+
+export function detectTableDraftsFromPageEntries({
+  attachmentID,
+  attachmentKey,
+  itemTitle,
+  pageNumber,
+  capturedAt,
+  entries,
+}: {
+  attachmentID: number;
+  attachmentKey: string;
+  itemTitle: string;
+  pageNumber: number;
+  capturedAt: string;
+  entries: PageTextEntry[];
+}): TableSelectionDraft[] {
+  const rows = buildTableRows(entries);
+  const rowBlocks = collectTableRowBlocks(rows);
+
+  return rowBlocks.flatMap((rowBlock, blockIndex) => {
+    const structuredRows = normalizeDetectedTableRows(rowBlock);
+    if (!structuredRows.length) {
+      return [];
+    }
+
+    const selectedText = structuredRows.map((row) => row.join("\t")).join("\n");
+    if (!selectedText.trim()) {
+      return [];
+    }
+
+    return [
+      {
+        source: "reader-pdf-table-scan",
+        attachmentID,
+        attachmentKey,
+        itemTitle,
+        pageNumber,
+        capturedAt,
+        selectedText,
+        selectedTextLength: selectedText.trim().length,
+        structuredRows,
+        extractionDiagnostics: [
+          getString("reader-diagnostic-pdf-table-detected", {
+            args: {
+              index: blockIndex + 1,
+              page: pageNumber,
+              rows: structuredRows.length,
+              cols: Math.max(...structuredRows.map((row) => row.length)),
+            },
+          }),
+        ],
+      },
+    ];
+  });
+}
+
+export async function scanActiveReaderForTables(
+  reader?: any,
+): Promise<ReaderTableScanResult | null> {
+  const activeReader = reader ?? getActiveReader();
+  if (!activeReader?.itemID) {
+    return null;
+  }
+
+  const { attachmentID, attachmentKey, itemTitle } =
+    await getReaderAttachmentMetadata(activeReader);
+  const capturedAt = new Date().toISOString();
+  const diagnostics: string[] = [];
+  const pdfDocument = getReaderPdfDocument(activeReader);
+
+  if (!pdfDocument?.getPage) {
+    diagnostics.push(getString("reader-diagnostic-pdf-document-unavailable"));
+    return {
+      attachmentID,
+      attachmentKey,
+      itemTitle,
+      capturedAt,
+      pageCount: 0,
+      tableDrafts: [],
+      diagnostics,
+    };
+  }
+
+  const pageCount = Number(pdfDocument.numPages);
+  const safePageCount = Number.isFinite(pageCount) ? pageCount : 0;
+  const tableDrafts: TableSelectionDraft[] = [];
+
+  for (let pageNumber = 1; pageNumber <= safePageCount; pageNumber += 1) {
+    try {
+      const entries = await getPdfPageTextEntries(
+        activeReader,
+        pdfDocument,
+        pageNumber,
+      );
+      if (!entries.length) {
+        continue;
+      }
+
+      tableDrafts.push(
+        ...detectTableDraftsFromPageEntries({
+          attachmentID,
+          attachmentKey,
+          itemTitle,
+          pageNumber,
+          capturedAt,
+          entries,
+        }),
+      );
+    } catch (error) {
+      diagnostics.push(
+        getString("reader-diagnostic-pdf-page-scan-error", {
+          args: { page: pageNumber },
+        }),
+      );
+      Zotero.logError(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  return {
+    attachmentID,
+    attachmentKey,
+    itemTitle,
+    capturedAt,
+    pageCount: safePageCount,
+    tableDrafts,
+    diagnostics,
+  };
+}
+
+export async function debugScanActiveReaderForTables(
+  reader?: any,
+): Promise<ReaderTableScanDebugResult | null> {
+  const activeReader = reader ?? getActiveReader();
+  if (!activeReader?.itemID) {
+    return null;
+  }
+
+  const { attachmentID, attachmentKey, itemTitle } =
+    await getReaderAttachmentMetadata(activeReader);
+  const capturedAt = new Date().toISOString();
+  const diagnostics: string[] = [];
+  const pdfDocument = getReaderPdfDocument(activeReader);
+
+  if (!pdfDocument?.getPage) {
+    diagnostics.push(getString("reader-diagnostic-pdf-document-unavailable"));
+    return {
+      attachmentID,
+      attachmentKey,
+      itemTitle,
+      capturedAt,
+      pageCount: 0,
+      diagnostics,
+      pages: [],
+    };
+  }
+
+  const pageCount = Number(pdfDocument.numPages);
+  const safePageCount = Number.isFinite(pageCount) ? pageCount : 0;
+  const pages: ReaderTableScanDebugResult["pages"] = [];
+
+  for (let pageNumber = 1; pageNumber <= safePageCount; pageNumber += 1) {
+    try {
+      const entries = await getPdfPageTextEntries(
+        activeReader,
+        pdfDocument,
+        pageNumber,
+      );
+      const rows = buildTableRows(entries);
+      const rowBlocks = collectTableRowBlocks(rows);
+      const normalizedTables = rowBlocks
+        .map((rowBlock) => normalizeDetectedTableRows(rowBlock))
+        .filter((structuredRows) => structuredRows.length);
+
+      pages.push({
+        pageNumber,
+        entryCount: entries.length,
+        rowCount: rows.length,
+        rowBlockCount: rowBlocks.length,
+        detectedTableCount: normalizedTables.length,
+        maxCellsInRow: Math.max(...rows.map((row) => row.cells.length), 0),
+        maxDetectedColumnCount: Math.max(
+          ...normalizedTables.flatMap((rows) => rows.map((row) => row.length)),
+          0,
+        ),
+        textPreview: entries
+          .slice(0, 12)
+          .map((entry) => entry.text)
+          .join(" | "),
+        blockSummaries: rowBlocks.slice(0, 3).map((rowBlock) => ({
+          rowCount: rowBlock.length,
+          maxColumnCount: Math.max(...rowBlock.map((row) => row.cells.length), 0),
+          preview: rowBlock[0]?.cells.map((cell) => cell.text).join(" | ") ?? "",
+        })),
+      });
+    } catch (error) {
+      diagnostics.push(
+        getString("reader-diagnostic-pdf-page-scan-error", {
+          args: { page: pageNumber },
+        }),
+      );
+      Zotero.logError(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  return {
+    attachmentID,
+    attachmentKey,
+    itemTitle,
+    capturedAt,
+    pageCount: safePageCount,
+    diagnostics,
+    pages,
+  };
+}
+
+async function getReaderAttachmentMetadata(reader: any): Promise<{
+  attachmentID: number;
+  attachmentKey: string;
+  itemTitle: string;
+}> {
+  const attachment = (await Zotero.Items.getAsync(reader.itemID)) as Zotero.Item;
+  const parentItem = attachment.parentID
+    ? ((await Zotero.Items.getAsync(attachment.parentID)) as Zotero.Item)
+    : undefined;
+
+  return {
+    attachmentID: attachment.id,
+    attachmentKey: attachment.key,
+    itemTitle:
+      (parentItem?.getField("title", false, true) as string) ||
+      (attachment.getField("title", false, true) as string) ||
+      attachment.key,
+  };
+}
+
+function getReaderCurrentPageNumber(reader: any): number | undefined {
+  const currentPageNumber = Number(
+    reader?._iframeWindow?.wrappedJSObject?.PDFViewerApplication?.pdfViewer
+      ?.currentPageNumber ??
+      reader?._iframeWindow?.PDFViewerApplication?.pdfViewer?.currentPageNumber,
+  );
+
+  return Number.isFinite(currentPageNumber) ? currentPageNumber : undefined;
+}
+
+function getReaderPdfDocument(reader: any): any {
+  return (
+    reader?._iframeWindow?.wrappedJSObject?.PDFViewerApplication?.pdfDocument ??
+    reader?._iframeWindow?.PDFViewerApplication?.pdfDocument
+  );
+}
+
+async function getPdfPageTextEntries(
+  reader: any,
+  pdfDocument: any,
+  pageNumber: number,
+): Promise<PageTextEntry[]> {
+  const directEntries = await getPdfPageTextEntriesDirect(pdfDocument, pageNumber);
+  if (directEntries.length) {
+    return directEntries;
+  }
+
+  return getPdfPageTextEntriesFromContentWindow(reader, pageNumber);
+}
+
+async function getPdfPageTextEntriesDirect(
+  pdfDocument: any,
+  pageNumber: number,
+): Promise<PageTextEntry[]> {
+  const pdfPage = await pdfDocument.getPage(pageNumber);
+  const textContent = await pdfPage?.getTextContent?.();
+  return mapPdfTextItemsToEntries(textContent?.items);
+}
+
+async function getPdfPageTextEntriesFromContentWindow(
+  reader: any,
+  pageNumber: number,
+): Promise<PageTextEntry[]> {
+  const iframeWindow = reader?._iframeWindow?.wrappedJSObject ?? reader?._iframeWindow;
+  const runner = iframeWindow?.Function?.(
+    `return (async function(pageNumber) {
+      const app = this.PDFViewerApplication;
+      const pdfDocument = app?.pdfDocument;
+      if (!pdfDocument?.getPage) {
+        return "[]";
+      }
+
+      const pdfPage = await pdfDocument.getPage(pageNumber);
+      const textContent = await pdfPage.getTextContent();
+      const entries = Array.from(textContent?.items ?? [])
+        .map((item) => {
+          const text = typeof item?.str === "string"
+            ? item.str.replace(/\u00a0/g, " ").trim()
+            : "";
+          if (!text) {
+            return undefined;
+          }
+
+          const transform = Array.from(item?.transform ?? [])
+            .slice(0, 6)
+            .map((value) => Number(value));
+          if (
+            transform.length !== 6 ||
+            transform.some((value) => !Number.isFinite(value))
+          ) {
+            return undefined;
+          }
+
+          const width = Math.max(Math.abs(Number(item?.width) || 0), 1);
+          const height = Math.max(
+            Math.abs(Number(item?.height) || 0),
+            Math.abs(transform[3]) || Math.abs(transform[0]) || 0,
+            1,
+          );
+          const left = transform[4];
+          const bottom = transform[5];
+          const right = left + width;
+          const top = bottom - height;
+
+          return {
+            text,
+            left,
+            top,
+            right,
+            bottom,
+            centerX: (left + right) / 2,
+            centerY: (top + bottom) / 2,
+          };
+        })
+        .filter(Boolean);
+
+      return JSON.stringify(entries);
+    }).apply(this, arguments);`,
+  );
+  if (!runner) {
+    return [];
+  }
+
+  const serializedEntries = await runner.call(iframeWindow, pageNumber);
+  if (typeof serializedEntries !== "string" || !serializedEntries) {
+    return [];
+  }
+
+  try {
+    return normalizeSerializedPageEntries(JSON.parse(serializedEntries));
+  } catch {
+    return [];
+  }
+}
+
+function mapPdfTextItemsToEntries(items: unknown): PageTextEntry[] {
+  return Array.from((items ?? []) as ArrayLike<any>)
+    .map((item) => buildPageTextEntry(item))
+    .filter((entry): entry is PageTextEntry => Boolean(entry));
+}
+
+function normalizeSerializedPageEntries(entries: unknown): PageTextEntry[] {
+  return Array.from((entries ?? []) as ArrayLike<any>)
+    .map((entry) => buildPageTextEntry(entry, true))
+    .filter((pageEntry): pageEntry is PageTextEntry => Boolean(pageEntry));
+}
+
+function buildPageTextEntry(
+  item: any,
+  hasExplicitBounds = false,
+): PageTextEntry | undefined {
+  const text =
+    typeof item?.text === "string"
+      ? item.text.trim()
+      : typeof item?.str === "string"
+        ? item.str.replace(/\u00a0/g, " ").trim()
+        : "";
+  if (!text) {
+    return undefined;
+  }
+
+  if (hasExplicitBounds) {
+    const left = Number(item?.left);
+    const top = Number(item?.top);
+    const right = Number(item?.right);
+    const bottom = Number(item?.bottom);
+    const centerX = Number(item?.centerX);
+    const centerY = Number(item?.centerY);
+
+    if (
+      ![
+        left,
+        top,
+        right,
+        bottom,
+        centerX,
+        centerY,
+      ].every((value) => Number.isFinite(value))
+    ) {
+      return undefined;
+    }
+
+    return {
+      text,
+      left,
+      top,
+      right,
+      bottom,
+      centerX,
+      centerY,
+    };
+  }
+
+  const transform = snapshotNumericTuple(item?.transform, 6);
+  if (!transform) {
+    return undefined;
+  }
+
+  const width = Math.max(Math.abs(Number(item?.width) || 0), 1);
+  const height = Math.max(
+    Math.abs(Number(item?.height) || 0),
+    Math.abs(transform[3]) || Math.abs(transform[0]) || 0,
+    1,
+  );
+  const left = transform[4];
+  const bottom = transform[5];
+  const right = left + width;
+  const top = bottom - height;
+
+  return {
+    text,
+    left,
+    top,
+    right,
+    bottom,
+    centerX: (left + right) / 2,
+    centerY: (top + bottom) / 2,
+  };
+}
+
+function buildTableRows(entries: PageTextEntry[]): TableLikeRow[] {
+  if (!entries.length) {
+    return [];
+  }
+
+  const sortedEntries = [...entries].sort((left, right) => {
+    const verticalDistance = right.centerY - left.centerY;
+    if (Math.abs(verticalDistance) > 0.5) {
+      return verticalDistance;
+    }
+    return left.left - right.left;
+  });
+  const entryHeights = sortedEntries.map((entry) => entry.bottom - entry.top);
+  const rowTolerance = Math.max(6, getMedian(entryHeights) * 0.8);
+  const rows: Array<{
+    entries: PageTextEntry[];
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+    centerY: number;
+  }> = [];
+
+  for (const entry of sortedEntries) {
+    const lastRow = rows.at(-1);
+    if (!lastRow || Math.abs(entry.centerY - lastRow.centerY) > rowTolerance) {
+      rows.push({
+        entries: [entry],
+        left: entry.left,
+        top: entry.top,
+        right: entry.right,
+        bottom: entry.bottom,
+        centerY: entry.centerY,
+      });
+      continue;
+    }
+
+    lastRow.entries.push(entry);
+    lastRow.left = Math.min(lastRow.left, entry.left);
+    lastRow.top = Math.min(lastRow.top, entry.top);
+    lastRow.right = Math.max(lastRow.right, entry.right);
+    lastRow.bottom = Math.max(lastRow.bottom, entry.bottom);
+    lastRow.centerY = getMedian(lastRow.entries.map((rowEntry) => rowEntry.centerY));
+  }
+
+  return rows
+    .map((row) => {
+      const cells = buildCellsFromEntries(
+        [...row.entries].sort((left, right) => left.left - right.left),
+      );
+      if (!cells.length) {
+        return undefined;
+      }
+
+      return {
+        left: row.left,
+        top: row.top,
+        right: row.right,
+        bottom: row.bottom,
+        centerY: row.centerY,
+        cells,
+      } satisfies TableLikeRow;
+    })
+    .filter((row): row is TableLikeRow => Boolean(row));
+}
+
+function collectTableRowBlocks(rows: TableLikeRow[]): TableLikeRow[][] {
+  if (!rows.length) {
+    return [];
+  }
+
+  const rowHeights = rows.map((row) => row.bottom - row.top);
+  const rowGapTolerance = Math.max(18, getMedian(rowHeights) * 2.4);
+  const rowBlocks: TableLikeRow[][] = [];
+  let currentBlock: TableLikeRow[] = [];
+
+  const flushBlock = () => {
+    if (currentBlock.length >= MIN_TABLE_ROWS) {
+      rowBlocks.push([...currentBlock]);
+    }
+    currentBlock = [];
+  };
+
+  for (const row of rows) {
+    if (row.cells.length < MIN_TABLE_COLUMNS) {
+      flushBlock();
+      continue;
+    }
+
+    const lastRow = currentBlock.at(-1);
+    if (!lastRow) {
+      currentBlock = [row];
+      continue;
+    }
+
+    const gap = Math.abs(lastRow.centerY - row.centerY);
+    if (gap > rowGapTolerance || !rowsLookCompatible(lastRow, row)) {
+      flushBlock();
+      currentBlock = [row];
+      continue;
+    }
+
+    currentBlock.push(row);
+  }
+
+  flushBlock();
+  return rowBlocks;
+}
+
+function rowsLookCompatible(left: TableLikeRow, right: TableLikeRow): boolean {
+  if (!left.cells.length || !right.cells.length) {
+    return false;
+  }
+
+  const leftStart = left.cells[0].left;
+  const leftEnd = left.cells.at(-1)?.right ?? left.right;
+  const rightStart = right.cells[0].left;
+  const rightEnd = right.cells.at(-1)?.right ?? right.right;
+
+  return (
+    Math.abs(left.cells.length - right.cells.length) <= 2 &&
+    leftEnd >= rightStart - 24 &&
+    rightEnd >= leftStart - 24
+  );
+}
+
+function normalizeDetectedTableRows(rows: TableLikeRow[]): string[][] {
+  if (rows.length < MIN_TABLE_ROWS) {
+    return [];
+  }
+
+  const columnCount = Math.max(...rows.map((row) => row.cells.length));
+  if (columnCount < MIN_TABLE_COLUMNS) {
+    return [];
+  }
+
+  const templateRow = rows.find((row) => row.cells.length === columnCount) ?? rows[0];
+  const anchors = templateRow.cells.map((cell) => cell.centerX);
+  const structuredRows = rows
+    .map((row) =>
+      alignCellsToAnchors(row.cells, anchors, columnCount).map((cell) =>
+        cell.trim(),
+      ),
+    )
+    .filter((row) => row.some((cell) => cell.length));
+  const populatedRows = structuredRows.filter(
+    (row) => row.filter((cell) => cell.length).length >= MIN_TABLE_COLUMNS,
+  );
+
+  return populatedRows.length >= MIN_TABLE_ROWS ? structuredRows : [];
 }
 
 function getSelectionAnnotation(
@@ -429,13 +1015,12 @@ function buildCellsFromEntries(
     return [];
   }
 
-  const entryHeights = entries.map((entry) => entry.bottom - entry.top);
-  const gapTolerance = Math.max(12, getMedian(entryHeights) * 0.9);
+  const gapTolerance = getCellGapTolerance(entries);
   const cells: StructuredCell[] = [];
 
   for (const entry of entries) {
     const lastCell = cells.at(-1);
-    if (!lastCell || entry.left - lastCell.right > gapTolerance) {
+    if (!lastCell || entry.left - lastCell.right >= gapTolerance) {
       cells.push({
         left: entry.left,
         top: entry.top,
@@ -457,6 +1042,22 @@ function buildCellsFromEntries(
   }
 
   return cells;
+}
+
+function getCellGapTolerance(entries: SelectionTextEntry[]): number {
+  const entryHeights = entries.map((entry) => entry.bottom - entry.top);
+  const heightDrivenLimit = Math.max(2, getMedian(entryHeights) * 0.4);
+  const horizontalGaps = entries
+    .slice(1)
+    .map((entry, index) => entry.left - entries[index].right)
+    .filter((gap) => Number.isFinite(gap) && gap > 0);
+
+  if (!horizontalGaps.length) {
+    return Math.min(6, heightDrivenLimit);
+  }
+
+  const gapDrivenLimit = Math.max(2, getMedian(horizontalGaps) * 0.6);
+  return Math.min(6, heightDrivenLimit, gapDrivenLimit);
 }
 
 function alignCellsToAnchors(

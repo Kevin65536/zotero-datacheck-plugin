@@ -7,8 +7,14 @@ import {
   getActiveReaderContext,
   hydrateSelectionAnnotationText,
   rememberReaderSelection,
+  scanActiveReaderForTables,
 } from "./reader";
-import type { AuditReport, TableDocument } from "./types";
+import type {
+  AuditReport,
+  ReaderTableScanResult,
+  TableDocument,
+  TableSelectionDraft,
+} from "./types";
 
 const FILE_MENU_SEPARATOR_ID = `${config.addonRef}-file-menu-separator`;
 const FILE_MENU_ITEM_ID = `${config.addonRef}-file-menu-item`;
@@ -37,6 +43,13 @@ export interface ReportVisualizationModel {
   columnProfiles: NumericColumnProfile[];
   maxColumnTotal: number;
   numericCellCount: number;
+}
+
+interface PdfAuditTableResult {
+  index: number;
+  draft: TableSelectionDraft;
+  table: TableDocument;
+  report: AuditReport;
 }
 
 export function appendSelectionPopupAnalyzeButton({
@@ -277,6 +290,26 @@ export class DataCheckCommandFactory {
       });
     };
 
+  private static readonly createSelectorContextMenuHandler: _ZoteroTypes.Reader.EventHandler<"createSelectorContextMenu"> =
+    ({ append }) => {
+      append({
+        label: getString("contextmenu-analyze-label"),
+        onCommand: () => {
+          void DataCheckCommandFactory.runAnalyzeCurrentReader();
+        },
+      });
+    };
+
+  private static readonly createViewContextMenuHandler: _ZoteroTypes.Reader.EventHandler<"createViewContextMenu"> =
+    ({ append, reader }) => {
+      append({
+        label: getString("contextmenu-analyze-pdf-label"),
+        onCommand: () => {
+          void DataCheckCommandFactory.runAnalyzeCurrentPdf(reader);
+        },
+      });
+    };
+
   static registerReaderIntegration() {
     this.unregisterReaderIntegration();
 
@@ -285,12 +318,30 @@ export class DataCheckCommandFactory {
       this.renderTextSelectionPopupHandler,
       config.addonID,
     );
+    Zotero.Reader.registerEventListener(
+      "createSelectorContextMenu",
+      this.createSelectorContextMenuHandler,
+      config.addonID,
+    );
+    Zotero.Reader.registerEventListener(
+      "createViewContextMenu",
+      this.createViewContextMenuHandler,
+      config.addonID,
+    );
   }
 
   static unregisterReaderIntegration() {
     Zotero.Reader.unregisterEventListener(
       "renderTextSelectionPopup",
       this.renderTextSelectionPopupHandler,
+    );
+    Zotero.Reader.unregisterEventListener(
+      "createSelectorContextMenu",
+      this.createSelectorContextMenuHandler,
+    );
+    Zotero.Reader.unregisterEventListener(
+      "createViewContextMenu",
+      this.createViewContextMenuHandler,
     );
   }
 
@@ -422,6 +473,148 @@ export class DataCheckCommandFactory {
     }
   }
 
+  static async runAnalyzeCurrentPdf(reader?: any) {
+    try {
+      const scanResult = await scanActiveReaderForTables(reader);
+      if (!scanResult) {
+        new ztoolkit.ProgressWindow(addon.data.config.addonName)
+          .createLine({
+            text: getString("command-reader-required"),
+            type: "default",
+            progress: 100,
+          })
+          .show();
+        return;
+      }
+
+      const tableResults = scanResult.tableDrafts.map((draft, index) => {
+        const table = parseTableSelection(draft);
+        const report = buildAuditReport(table);
+
+        return {
+          index: index + 1,
+          draft,
+          table,
+          report,
+        } satisfies PdfAuditTableResult;
+      });
+
+      if (!tableResults.length) {
+        const popupWin = new ztoolkit.ProgressWindow(
+          addon.data.config.addonName,
+          {
+            closeOnClick: true,
+            closeTime: -1,
+          },
+        )
+          .createLine({
+            text: getString("command-pdf-analysis-none"),
+            type: "default",
+            progress: 100,
+          })
+          .createLine({
+            text: getString("command-draft-item", {
+              args: { title: scanResult.itemTitle },
+            }),
+            type: "default",
+          })
+          .createLine({
+            text: getString("command-pdf-analysis-pages", {
+              args: { pages: scanResult.pageCount },
+            }),
+            type: "default",
+          })
+          .show();
+
+        if (scanResult.diagnostics.length) {
+          popupWin.createLine({
+            text: getString("command-pdf-analysis-diagnostics", {
+              args: { count: scanResult.diagnostics.length },
+            }),
+            type: "default",
+          });
+        }
+
+        popupWin.startCloseTimer(8000);
+        return;
+      }
+
+      const totalFindings = tableResults.reduce((count, tableResult) => {
+        return count + tableResult.report.findingCount;
+      }, 0);
+
+      addon.data.dataCheck.lastSelectionDraft = tableResults[0].draft;
+      addon.data.dataCheck.lastTableDocument = tableResults[0].table;
+      addon.data.dataCheck.lastAuditReport = tableResults[0].report;
+
+      const popupWin = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
+        closeOnClick: true,
+        closeTime: -1,
+      })
+        .createLine({
+          text: getString("command-pdf-analysis-complete", {
+            args: { tables: tableResults.length },
+          }),
+          type: "success",
+          progress: 100,
+        })
+        .createLine({
+          text: getString("command-draft-item", {
+            args: { title: scanResult.itemTitle },
+          }),
+          type: "default",
+        })
+        .createLine({
+          text: getString("command-pdf-analysis-pages", {
+            args: { pages: scanResult.pageCount },
+          }),
+          type: "default",
+        })
+        .createLine({
+          text: getString("command-pdf-analysis-findings", {
+            args: { count: totalFindings },
+          }),
+          type: "default",
+        })
+        .show();
+
+      if (scanResult.diagnostics.length) {
+        popupWin.createLine({
+          text: getString("command-pdf-analysis-diagnostics", {
+            args: { count: scanResult.diagnostics.length },
+          }),
+          type: "default",
+        });
+      }
+
+      popupWin.startCloseTimer(7000);
+      this.showPdfAuditReportDialog(scanResult, tableResults);
+    } catch (error) {
+      const analysisError =
+        error instanceof Error ? error : new Error(String(error));
+      Zotero.logError(analysisError);
+
+      const popupWin = new ztoolkit.ProgressWindow(
+        addon.data.config.addonName,
+        {
+          closeOnClick: true,
+          closeTime: -1,
+        },
+      )
+        .createLine({
+          text: getString("command-analysis-error"),
+          type: "default",
+          progress: 100,
+        })
+        .createLine({
+          text: analysisError.message,
+          type: "default",
+        })
+        .show();
+      popupWin.startCloseTimer(8000);
+    }
+  }
+
   private static showAuditReportDialog(
     table: TableDocument,
     report: AuditReport,
@@ -462,15 +655,52 @@ export class DataCheckCommandFactory {
     );
   }
 
+  private static showPdfAuditReportDialog(
+    scanResult: ReaderTableScanResult,
+    tableResults: PdfAuditTableResult[],
+  ) {
+    addon.data.dialog?.window?.close();
+
+    const dialogHelper = new ztoolkit.Dialog(1, 1)
+      .addCell(
+        0,
+        0,
+        {
+          tag: "div",
+          namespace: "html",
+          properties: {
+            innerHTML: this.renderPdfAuditReportMarkup(scanResult, tableResults),
+          },
+          styles: {
+            width: "980px",
+            maxHeight: "680px",
+            overflowY: "auto",
+            paddingRight: "4px",
+          },
+        },
+        false,
+      )
+      .addButton(getString("report-dialog-close"), "close")
+      .open(getString("report-dialog-title-pdf"));
+
+    addon.data.dialog = dialogHelper;
+    dialogHelper.window?.addEventListener(
+      "unload",
+      () => {
+        if (addon.data.dialog === dialogHelper) {
+          addon.data.dialog = undefined;
+        }
+      },
+      { once: true },
+    );
+  }
+
   private static renderAuditReportMarkup(
     table: TableDocument,
     report: AuditReport,
   ): string {
     const visualizationModel = buildReportVisualizationModel(table);
-    const sourceLabel =
-      table.source === "reader-structured-selection"
-        ? getString("report-source-structured")
-        : getString("report-source-text");
+    const sourceLabel = this.getSourceLabel(table.source);
     const detectorMarkup = report.detectorResults
       .map((detectorResult) => {
         const toneClass =
@@ -567,6 +797,196 @@ export class DataCheckCommandFactory {
         </section>
       </div>
     </div>`;
+  }
+
+  private static renderPdfAuditReportMarkup(
+    scanResult: ReaderTableScanResult,
+    tableResults: PdfAuditTableResult[],
+  ): string {
+    const totalFindings = tableResults.reduce((count, tableResult) => {
+      return count + tableResult.report.findingCount;
+    }, 0);
+    const flaggedTables = tableResults.filter(
+      (tableResult) => tableResult.report.findingCount,
+    ).length;
+    const detectedPages = new Set(
+      tableResults.map((tableResult) => tableResult.table.pageNumber ?? 0),
+    ).size;
+    const diagnosticsMarkup = scanResult.diagnostics.length
+      ? scanResult.diagnostics
+          .map(
+            (diagnostic) =>
+              `<div class="dc-diagnostic-card">${escapeHtml(diagnostic)}</div>`,
+          )
+          .join("")
+      : `<div class="dc-empty-state">${escapeHtml(getString("report-empty-diagnostics"))}</div>`;
+    const tablesMarkup = tableResults
+      .map((tableResult) => this.renderPdfTableSummaryCard(tableResult))
+      .join("");
+
+    return `${this.renderReportStyles()}
+    <div class="dc-report">
+      <header class="dc-hero">
+        <div class="dc-hero-title">${escapeHtml(getString("report-dialog-title-pdf"))}</div>
+        <div class="dc-hero-summary">${escapeHtml(
+          getString("report-pdf-summary", {
+            args: {
+              pages: scanResult.pageCount,
+              tables: tableResults.length,
+              findings: totalFindings,
+            },
+          }),
+        )}</div>
+      </header>
+
+      <div class="dc-metrics">
+        ${this.renderMetricCard(
+          getString("report-pdf-card-pages"),
+          String(scanResult.pageCount),
+          getString("command-draft-item", {
+            args: { title: scanResult.itemTitle },
+          }),
+          "sky",
+        )}
+        ${this.renderMetricCard(
+          getString("report-pdf-card-tables"),
+          String(tableResults.length),
+          getString("report-pdf-card-detected-pages", {
+            args: { count: detectedPages },
+          }),
+          "mint",
+        )}
+        ${this.renderMetricCard(
+          getString("report-card-findings"),
+          String(totalFindings),
+          getString("report-pdf-card-flagged-tables", {
+            args: { count: flaggedTables },
+          }),
+          "amber",
+        )}
+        ${this.renderMetricCard(
+          getString("report-card-source"),
+          getString("report-source-pdf-scan"),
+          scanResult.attachmentKey,
+          "violet",
+        )}
+      </div>
+
+      <div class="dc-sections">
+        <section class="dc-section">
+          <div class="dc-section-title">${escapeHtml(getString("report-section-diagnostics"))}</div>
+          <div class="dc-stack">${diagnosticsMarkup}</div>
+        </section>
+
+        <section class="dc-section">
+          <div class="dc-section-title">${escapeHtml(getString("report-section-tables"))}</div>
+          <div class="dc-stack">${tablesMarkup}</div>
+        </section>
+      </div>
+    </div>`;
+  }
+
+  private static renderPdfTableSummaryCard(
+    tableResult: PdfAuditTableResult,
+  ): string {
+    const { index, table, report } = tableResult;
+    const flattenedFindings = report.detectorResults
+      .flatMap((detectorResult) => {
+        return detectorResult.findings.map((finding) => ({
+          detectorId: detectorResult.detectorId,
+          message: finding.message,
+        }));
+      })
+      .slice(0, 3);
+    const findingsMarkup = flattenedFindings.length
+      ? flattenedFindings
+          .map(
+            (finding) => `<div class="dc-preview-item">
+            <div class="dc-finding-label">${escapeHtml(getDetectorTitle(finding.detectorId))}</div>
+            <div class="dc-finding-message">${escapeHtml(finding.message)}</div>
+          </div>`,
+          )
+          .join("")
+      : `<div class="dc-empty-state">${escapeHtml(getString("report-empty-findings"))}</div>`;
+    const diagnosticsMarkup = report.tableDiagnostics.length
+      ? report.tableDiagnostics
+          .slice(0, 3)
+          .map(
+            (diagnostic) =>
+              `<div class="dc-diagnostic-card">${escapeHtml(diagnostic)}</div>`,
+          )
+          .join("")
+      : `<div class="dc-empty-state">${escapeHtml(getString("report-empty-diagnostics"))}</div>`;
+    const severity = report.findingCount ? "warning" : "info";
+
+    return `<article class="dc-panel dc-table-summary-card">
+      <div class="dc-panel-head">
+        <div>
+          <div class="dc-panel-title">${escapeHtml(
+            getString("report-pdf-table-title", {
+              args: {
+                index,
+                page: table.pageNumber ?? "?",
+              },
+            }),
+          )}</div>
+          <div class="dc-panel-detail">${escapeHtml(report.summary)}</div>
+        </div>
+        <div class="dc-chip-row">
+          <span class="dc-chip ${severity === "warning" ? "dc-chip-warning" : "dc-chip-info"}">${escapeHtml(getSeverityLabel(severity))}</span>
+          <span class="dc-chip dc-chip-count">${report.findingCount}</span>
+        </div>
+      </div>
+
+      <div class="dc-metrics dc-metrics-compact">
+        ${this.renderMetricCard(
+          getString("report-card-table"),
+          `${table.rowCount} x ${table.columnCount}`,
+          getString("report-card-page-detail", {
+            args: { page: table.pageNumber ?? "?" },
+          }),
+          "sky",
+        )}
+        ${this.renderMetricCard(
+          getString("report-card-numeric"),
+          String(table.numericCellCount),
+          getString("report-card-header-detail", {
+            args: { count: table.header ? table.header.length : 0 },
+          }),
+          "mint",
+        )}
+        ${this.renderMetricCard(
+          getString("report-card-source"),
+          this.getSourceLabel(table.source),
+          getString("report-card-flagged-detail", {
+            args: {
+              count: report.detectorResults.filter(
+                (detectorResult) => detectorResult.findings.length,
+              ).length,
+            },
+          }),
+          "amber",
+        )}
+      </div>
+
+      <div class="dc-stack dc-stack-tight">
+        <div class="dc-subsection-label">${escapeHtml(getString("report-section-findings"))}</div>
+        <div class="dc-stack dc-stack-tight">${findingsMarkup}</div>
+        <div class="dc-subsection-label">${escapeHtml(getString("report-section-diagnostics"))}</div>
+        <div class="dc-stack dc-stack-tight">${diagnosticsMarkup}</div>
+      </div>
+    </article>`;
+  }
+
+  private static getSourceLabel(source: TableDocument["source"]): string {
+    switch (source) {
+      case "reader-structured-selection":
+        return getString("report-source-structured");
+      case "reader-pdf-table-scan":
+        return getString("report-source-pdf-scan");
+      default:
+        return getString("report-source-text");
+    }
   }
 
   private static renderMetricCard(
@@ -772,10 +1192,19 @@ export class DataCheckCommandFactory {
       }
 
       .dc-metrics,
+      .dc-metrics-compact,
       .dc-visual-grid {
         display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
         gap: 12px;
+      }
+
+      .dc-metrics {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+
+      .dc-metrics-compact {
+        margin-top: 14px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
       }
 
       .dc-metrics {
@@ -881,6 +1310,11 @@ export class DataCheckCommandFactory {
       .dc-empty-state,
       .dc-diagnostic-card {
         padding: 16px;
+      }
+
+      .dc-table-summary-card {
+        display: grid;
+        gap: 14px;
       }
 
       .dc-visual-grid {
@@ -1125,6 +1559,14 @@ export class DataCheckCommandFactory {
         letter-spacing: 0.08em;
       }
 
+      .dc-subsection-label {
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--dc-subtle);
+      }
+
       .dc-empty-state {
         color: var(--dc-muted);
         border-style: dashed;
@@ -1137,6 +1579,7 @@ export class DataCheckCommandFactory {
         }
 
         .dc-metrics,
+        .dc-metrics-compact,
         .dc-visual-grid {
           grid-template-columns: repeat(2, minmax(0, 1fr));
         }
@@ -1144,6 +1587,7 @@ export class DataCheckCommandFactory {
 
       @media (max-width: 640px) {
         .dc-metrics,
+        .dc-metrics-compact,
         .dc-visual-grid {
           grid-template-columns: minmax(0, 1fr);
         }

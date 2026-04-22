@@ -11,8 +11,21 @@ export interface ReaderAuditContext {
   extractionDiagnostics?: string[];
 }
 
+export interface PageTextEntry {
+  text: string;
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  centerX: number;
+  centerY: number;
+}
+
 export interface TableSelectionDraft {
-  source: "reader-text-selection" | "reader-structured-selection";
+  source:
+    | "reader-text-selection"
+    | "reader-structured-selection"
+    | "reader-pdf-table-scan";
   attachmentID: number;
   attachmentKey: string;
   itemTitle: string;
@@ -23,6 +36,44 @@ export interface TableSelectionDraft {
   structuredRows?: string[][];
   selectionRectCount?: number;
   extractionDiagnostics?: string[];
+}
+
+export interface ReaderTableScanResult {
+  attachmentID: number;
+  attachmentKey: string;
+  itemTitle: string;
+  capturedAt: string;
+  pageCount: number;
+  tableDrafts: TableSelectionDraft[];
+  diagnostics: string[];
+}
+
+export interface ReaderTableScanDebugBlock {
+  rowCount: number;
+  maxColumnCount: number;
+  preview: string;
+}
+
+export interface ReaderTableScanDebugPage {
+  pageNumber: number;
+  entryCount: number;
+  rowCount: number;
+  rowBlockCount: number;
+  detectedTableCount: number;
+  maxCellsInRow: number;
+  maxDetectedColumnCount: number;
+  textPreview: string;
+  blockSummaries: ReaderTableScanDebugBlock[];
+}
+
+export interface ReaderTableScanDebugResult {
+  attachmentID: number;
+  attachmentKey: string;
+  itemTitle: string;
+  capturedAt: string;
+  pageCount: number;
+  diagnostics: string[];
+  pages: ReaderTableScanDebugPage[];
 }
 
 export interface ParsedNumericValue {
