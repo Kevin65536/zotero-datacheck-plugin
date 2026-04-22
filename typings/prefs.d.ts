@@ -9,6 +9,18 @@ declare namespace _ZoteroTypes {
     PluginPrefsMap: {
       "enable": boolean;
       "input": string;
+      "detectorDuplicateRows": boolean;
+      "detectorNearDuplicateRows": boolean;
+      "detectorDuplicateNumericSequences": boolean;
+      "detectorBenfordDeviation": boolean;
+      "detectorTerminalDigitPreference": boolean;
+      "detectorRoundingHeaping": boolean;
+      "detectorPValueThresholdClustering": boolean;
+      "detectorRepeatedNumericColumns": boolean;
+      "detectorUniformNumericColumns": boolean;
+      "detectorLowVarianceNumericColumns": boolean;
+      "detectorInvalidPercentages": boolean;
+      "detectorInvalidPValues": boolean;
     };
   }
 }

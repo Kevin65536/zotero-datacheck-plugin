@@ -1,5 +1,6 @@
 import { assert } from "chai";
 import { buildAuditReport } from "../src/modules/datacheck/audit";
+import type { AuditDetectorId } from "../src/modules/datacheck/detectors";
 import {
   appendSelectionPopupAnalyzeButton,
   buildReportVisualizationModel,
@@ -711,6 +712,125 @@ describe("datacheck", function () {
       assert.equal(benfordResult?.applicability, "applied");
       assert.equal(benfordResult?.severity, "warning");
       assert.lengthOf(benfordResult?.findings ?? [], 1);
+    });
+
+    it("flags terminal digit preference and rounding heaping", function () {
+      const table = parseTableSelection(
+        createDraft(
+          [
+            "ID\tMetric",
+            "A\t10",
+            "B\t15",
+            "C\t20",
+            "D\t25",
+            "E\t30",
+            "F\t35",
+            "G\t40",
+            "H\t45",
+            "I\t50",
+            "J\t55",
+            "K\t60",
+            "L\t65",
+            "M\t70",
+            "N\t75",
+            "O\t80",
+            "P\t85",
+            "Q\t90",
+            "R\t95",
+            "S\t100",
+            "T\t105",
+          ].join("\n"),
+        ),
+      );
+      const report = buildAuditReport(table);
+      const terminalDigitResult = report.detectorResults.find(
+        (result) => result.detectorId === "terminal-digit-preference",
+      );
+      const roundingResult = report.detectorResults.find(
+        (result) => result.detectorId === "rounding-heaping",
+      );
+
+      assert.exists(terminalDigitResult);
+      assert.equal(terminalDigitResult?.severity, "warning");
+      assert.lengthOf(terminalDigitResult?.findings ?? [], 1);
+      assert.exists(roundingResult);
+      assert.equal(roundingResult?.severity, "warning");
+      assert.isAtLeast(roundingResult?.findings.length ?? 0, 1);
+    });
+
+    it("flags p-value threshold clustering near 0.05", function () {
+      const table = parseTableSelection(
+        createDraft(
+          [
+            "Study\tp",
+            "A\tp = 0.049",
+            "B\tp = 0.049",
+            "C\tp = 0.048",
+            "D\tp = 0.050",
+            "E\tp = 0.049",
+            "F\tp = 0.051",
+            "G\tp = 0.056",
+            "H\tp = 0.060",
+          ].join("\n"),
+        ),
+      );
+      const report = buildAuditReport(table);
+      const clusteringResult = report.detectorResults.find(
+        (result) => result.detectorId === "p-value-threshold-clustering",
+      );
+
+      assert.exists(clusteringResult);
+      assert.equal(clusteringResult?.severity, "warning");
+      assert.lengthOf(clusteringResult?.findings ?? [], 1);
+    });
+
+    it("flags low-variance columns and near-duplicate rows", function () {
+      const table = parseTableSelection(
+        createDraft(
+          [
+            "Method\tScore\tLatency\tMemory\tTag",
+            "Base\t0.901\t101\t202\talpha",
+            "Base-copy\t0.901\t101\t202\talpha",
+            "Base-copy-2\t0.903\t101\t203\tgamma",
+            "Variant\t0.904\t102\t203\tdelta",
+            "Variant-2\t0.905\t102\t204\tepsilon",
+          ].join("\n"),
+        ),
+      );
+      const report = buildAuditReport(table);
+      const nearDuplicateResult = report.detectorResults.find(
+        (result) => result.detectorId === "near-duplicate-rows",
+      );
+      const lowVarianceResult = report.detectorResults.find(
+        (result) => result.detectorId === "low-variance-numeric-columns",
+      );
+
+      assert.exists(nearDuplicateResult);
+      assert.equal(nearDuplicateResult?.severity, "warning");
+      assert.isAtLeast(nearDuplicateResult?.findings.length ?? 0, 1);
+      assert.exists(lowVarianceResult);
+      assert.isAtLeast(lowVarianceResult?.findings.length ?? 0, 1);
+    });
+
+    it("limits audit output to the selected detector set", function () {
+      const table = parseTableSelection(
+        createDraft(
+          [
+            "Condition\tValue A\tValue B\tp",
+            "A\t10\t20\tp = 0.03",
+            "B\t10\t20\tp = 1.20",
+            "C\t55%\t120%\tp = 0.04",
+          ].join("\n"),
+        ),
+      );
+      const enabledDetectorIds: AuditDetectorId[] = [
+        "invalid-percentages",
+      ];
+      const report = buildAuditReport(table, { enabledDetectorIds });
+
+      assert.lengthOf(report.detectorResults, 1);
+      assert.equal(report.detectorResults[0].detectorId, "invalid-percentages");
+      assert.equal(report.findingCount, 1);
     });
   });
 

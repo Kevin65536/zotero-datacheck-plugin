@@ -1,4 +1,8 @@
 import { config } from "../../package.json";
+import {
+  AUDIT_DETECTOR_PREFERENCES,
+  type AuditDetectorId,
+} from "../modules/datacheck/detectors";
 
 type PluginPrefsMap = _ZoteroTypes.Prefs["PluginPrefsMap"];
 
@@ -33,4 +37,15 @@ export function setPref<K extends keyof PluginPrefsMap>(
  */
 export function clearPref(key: string) {
   return Zotero.Prefs.clear(`${PREFS_PREFIX}.${key}`, true);
+}
+
+export function isDataCheckEnabled() {
+  return Boolean(getPref("enable"));
+}
+
+export function getEnabledAuditDetectorIds(): AuditDetectorId[] {
+  return AUDIT_DETECTOR_PREFERENCES.filter((entry) => {
+    const value = getPref(entry.prefKey as keyof PluginPrefsMap);
+    return typeof value === "boolean" ? value : entry.defaultEnabled;
+  }).map((entry) => entry.id);
 }

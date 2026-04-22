@@ -1,153 +1,97 @@
 import { config } from "../../package.json";
+import { AUDIT_DETECTOR_PREFERENCES } from "./datacheck/detectors";
 import { getString } from "../utils/locale";
+import { getPref, setPref } from "../utils/prefs";
 
-export async function registerPrefsScripts(_window: Window) {
-  // This function is called when the prefs window is opened
-  // See addon/content/preferences.xhtml onpaneload
-  if (!addon.data.prefs) {
-    addon.data.prefs = {
-      window: _window,
-      columns: [
-        {
-          dataKey: "title",
-          label: getString("prefs-table-title"),
-          fixedWidth: true,
-          width: 100,
-        },
-        {
-          dataKey: "detail",
-          label: getString("prefs-table-detail"),
-        },
-      ],
-      rows: buildPreferenceRows(),
-    };
-  } else {
-    addon.data.prefs.window = _window;
-    addon.data.prefs.rows = buildPreferenceRows();
+const PREFS_ROOT_ID = `${config.addonRef}-prefs-root`;
+
+export async function registerPrefsScripts(window: Window) {
+  renderPrefsUI(window);
+}
+
+function renderPrefsUI(window: Window) {
+  const doc = window.document;
+  const root = doc.getElementById(PREFS_ROOT_ID);
+  if (!root) {
+    return;
   }
-  updatePrefsUI();
-  bindPrefEvents();
-}
 
-function buildPreferenceRows() {
-  return [
-    {
-      title: getString("prefs-row-architecture-title"),
-      detail: getString("prefs-row-architecture-detail"),
-    },
-    {
-      title: getString("prefs-row-phase1-title"),
-      detail: getString("prefs-row-phase1-detail"),
-    },
-    {
-      title: getString("prefs-row-next-step-title"),
-      detail: getString("prefs-row-next-step-detail"),
-    },
-  ];
-}
+  root.replaceChildren();
 
-function getPrefToggleStateLabel(enabled: boolean) {
-  return getString(
-    enabled ? "prefs-toggle-state-enabled" : "prefs-toggle-state-disabled",
-  );
-}
+  const enableCard = doc.createElement("section");
+  enableCard.className = "dc-pref-card";
+  const enableLabel = doc.createElement("label");
+  enableLabel.className = "dc-pref-toggle";
+  const enableInput = doc.createElement("input");
+  enableInput.type = "checkbox";
+  enableInput.checked = Boolean(getPref("enable"));
+  const enableText = doc.createElement("span");
+  enableText.className = "dc-pref-toggle-text";
+  const enableTitle = doc.createElement("strong");
+  enableTitle.textContent = getString("prefs-enable-label");
+  const enableDetail = doc.createElement("span");
+  enableDetail.className = "dc-pref-detail";
+  enableDetail.textContent = getString("prefs-enable-detail");
+  enableText.append(enableTitle, enableDetail);
+  enableLabel.append(enableInput, enableText);
+  enableCard.append(enableLabel);
 
-async function updatePrefsUI() {
-  // You can initialize some UI elements on prefs window
-  // with addon.data.prefs.window.document
-  // Or bind some events to the elements
-  const renderLock = ztoolkit.getGlobal("Zotero").Promise.defer();
-  if (addon.data.prefs?.window == undefined) return;
-  const tableHelper = new ztoolkit.VirtualizedTable(addon.data.prefs?.window)
-    .setContainerId(`${config.addonRef}-table-container`)
-    .setProp({
-      id: `${config.addonRef}-prefs-table`,
-      // Do not use setLocale, as it modifies the Zotero.Intl.strings
-      // Set locales directly to columns
-      columns: addon.data.prefs?.columns,
-      showHeader: true,
-      multiSelect: true,
-      staticColumns: true,
-      disableFontSizeScaling: true,
-    })
-    .setProp("getRowCount", () => addon.data.prefs?.rows.length || 0)
-    .setProp(
-      "getRowData",
-      (index) =>
-        addon.data.prefs?.rows[index] || {
-          title: getString("prefs-row-empty-title"),
-          detail: getString("prefs-row-empty-detail"),
-        },
-    )
-    // Show a progress window when selection changes
-    .setProp("onSelectionChange", (selection) => {
-      const selectedRows =
-        addon.data.prefs?.rows
-          .filter((v, i) => selection.isSelected(i))
-          .map((row) => row.title)
-          .join(", ") || getString("prefs-row-empty-title");
+  const detectorCard = doc.createElement("section");
+  detectorCard.className = "dc-pref-card";
+  const detectorHeader = doc.createElement("div");
+  detectorHeader.className = "dc-pref-section-head";
+  const detectorTitle = doc.createElement("strong");
+  detectorTitle.textContent = getString("prefs-detectors-title");
+  const detectorDetail = doc.createElement("span");
+  detectorDetail.className = "dc-pref-detail";
+  detectorDetail.textContent = getString("prefs-detectors-detail");
+  const detectorSummary = doc.createElement("span");
+  detectorSummary.className = "dc-pref-summary";
+  detectorHeader.append(detectorTitle, detectorDetail, detectorSummary);
 
-      new ztoolkit.ProgressWindow(config.addonName)
-        .createLine({
-          text: getString("prefs-selection-message", {
-            args: { titles: selectedRows },
-          }),
-          progress: 100,
-        })
-        .show();
-    })
-    // When pressing delete, delete selected line and refresh table.
-    // Returning false to prevent default event.
-    .setProp("onKeyDown", (event: KeyboardEvent) => {
-      if (event.key == "Delete" || (Zotero.isMac && event.key == "Backspace")) {
-        addon.data.prefs!.rows =
-          addon.data.prefs?.rows.filter(
-            (v, i) => !tableHelper.treeInstance.selection.isSelected(i),
-          ) || [];
-        tableHelper.render();
-        return false;
-      }
-      return true;
-    })
-    // For find-as-you-type
-    .setProp(
-      "getRowString",
-      (index) => addon.data.prefs?.rows[index].title || "",
-    )
-    // Render the table.
-    .render(-1, () => {
-      renderLock.resolve();
-    });
-  await renderLock.promise;
-  ztoolkit.log("Preference table rendered!");
-}
+  const detectorList = doc.createElement("div");
+  detectorList.className = "dc-pref-detector-list";
+  const detectorInputs: HTMLInputElement[] = [];
 
-function bindPrefEvents() {
-  addon.data
-    .prefs!.window.document?.querySelector(
-      `#zotero-prefpane-${config.addonRef}-enable`,
-    )
-    ?.addEventListener("command", (e: Event) => {
-      ztoolkit.log(e);
-      addon.data.prefs!.window.alert(
-        getString("prefs-command-toggle-alert", {
-          args: {
-            state: getPrefToggleStateLabel((e.target as XUL.Checkbox).checked),
-          },
-        }),
-      );
+  for (const detector of AUDIT_DETECTOR_PREFERENCES) {
+    const item = doc.createElement("label");
+    item.className = "dc-pref-detector-item";
+    const checkbox = doc.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = Boolean(getPref(detector.prefKey));
+    checkbox.addEventListener("change", () => {
+      setPref(detector.prefKey, checkbox.checked);
+      updateDetectorState();
     });
 
-  addon.data
-    .prefs!.window.document?.querySelector(
-      `#zotero-prefpane-${config.addonRef}-input`,
-    )
-    ?.addEventListener("change", (e: Event) => {
-      ztoolkit.log(e);
-      addon.data.prefs!.window.alert(
-        getString("prefs-input-change-alert", {
-          args: { value: (e.target as HTMLInputElement).value },
-        }),
-      );
+    const text = doc.createElement("span");
+    text.textContent = getString(detector.titleL10nId);
+
+    item.append(checkbox, text);
+    detectorList.append(item);
+    detectorInputs.push(checkbox);
+  }
+
+  const updateDetectorState = () => {
+    const enabled = enableInput.checked;
+    detectorList.classList.toggle("is-disabled", !enabled);
+    for (const detectorInput of detectorInputs) {
+      detectorInput.disabled = !enabled;
+    }
+    detectorSummary.textContent = getString("prefs-detectors-selected-count", {
+      args: {
+        selected: detectorInputs.filter((input) => input.checked).length,
+        total: detectorInputs.length,
+      },
     });
+  };
+
+  enableInput.addEventListener("change", () => {
+    setPref("enable", enableInput.checked);
+    updateDetectorState();
+  });
+
+  detectorCard.append(detectorHeader, detectorList);
+  root.append(enableCard, detectorCard);
+  updateDetectorState();
 }

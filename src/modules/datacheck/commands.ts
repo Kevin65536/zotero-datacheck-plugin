@@ -1,6 +1,7 @@
 import { config } from "../../../package.json";
 import { getString } from "../../utils/locale";
 import { buildAuditReport, buildBenfordProfile } from "./audit";
+import { getAuditDetectorPreferenceDefinition } from "./detectors";
 import { parseTableSelection } from "./parser";
 import {
   createTableSelectionDraft,
@@ -9,6 +10,10 @@ import {
   rememberReaderSelection,
   scanActiveReaderForTables,
 } from "./reader";
+import {
+  getEnabledAuditDetectorIds,
+  isDataCheckEnabled,
+} from "../../utils/prefs";
 import type {
   AuditReport,
   ReaderTableScanResult,
@@ -166,6 +171,10 @@ export function renderSelectionPopupAnalyzeAction({
   ) => void;
   logError?: (error: Error) => void;
 }) {
+  if (!isDataCheckEnabled()) {
+    return undefined;
+  }
+
   hydrateSelectionAnnotationText(reader, annotation);
 
   try {
@@ -278,6 +287,10 @@ export function buildReportVisualizationModel(
 export class DataCheckCommandFactory {
   private static readonly renderTextSelectionPopupHandler: _ZoteroTypes.Reader.EventHandler<"renderTextSelectionPopup"> =
     ({ doc, append, params, reader }) => {
+      if (!isDataCheckEnabled()) {
+        return;
+      }
+
       renderSelectionPopupAnalyzeAction({
         doc,
         append,
@@ -292,6 +305,10 @@ export class DataCheckCommandFactory {
 
   private static readonly createSelectorContextMenuHandler: _ZoteroTypes.Reader.EventHandler<"createSelectorContextMenu"> =
     ({ append }) => {
+      if (!isDataCheckEnabled()) {
+        return;
+      }
+
       append({
         label: getString("contextmenu-analyze-label"),
         onCommand: () => {
@@ -302,6 +319,10 @@ export class DataCheckCommandFactory {
 
   private static readonly createViewContextMenuHandler: _ZoteroTypes.Reader.EventHandler<"createViewContextMenu"> =
     ({ append, reader }) => {
+      if (!isDataCheckEnabled()) {
+        return;
+      }
+
       append({
         label: getString("contextmenu-analyze-pdf-label"),
         onCommand: () => {
@@ -366,6 +387,11 @@ export class DataCheckCommandFactory {
 
   static async runAnalyzeCurrentReader() {
     try {
+      if (!isDataCheckEnabled()) {
+        this.showDisabledMessage();
+        return;
+      }
+
       const context = await getActiveReaderContext();
       if (!context) {
         new ztoolkit.ProgressWindow(addon.data.config.addonName)
@@ -379,6 +405,7 @@ export class DataCheckCommandFactory {
       }
 
       const draft = createTableSelectionDraft(context);
+  const enabledDetectorIds = getEnabledAuditDetectorIds();
       if (!draft.selectedTextLength) {
         new ztoolkit.ProgressWindow(addon.data.config.addonName)
           .createLine({
@@ -391,7 +418,7 @@ export class DataCheckCommandFactory {
       }
 
       const table = parseTableSelection(draft);
-      const report = buildAuditReport(table);
+  const report = buildAuditReport(table, { enabledDetectorIds });
 
       addon.data.dataCheck.lastReaderContext = context;
       addon.data.dataCheck.lastSelectionDraft = draft;
@@ -475,6 +502,11 @@ export class DataCheckCommandFactory {
 
   static async runAnalyzeCurrentPdf(reader?: any) {
     try {
+      if (!isDataCheckEnabled()) {
+        this.showDisabledMessage();
+        return;
+      }
+
       const scanResult = await scanActiveReaderForTables(reader);
       if (!scanResult) {
         new ztoolkit.ProgressWindow(addon.data.config.addonName)
@@ -487,9 +519,10 @@ export class DataCheckCommandFactory {
         return;
       }
 
+      const enabledDetectorIds = getEnabledAuditDetectorIds();
       const tableResults = scanResult.tableDrafts.map((draft, index) => {
         const table = parseTableSelection(draft);
-        const report = buildAuditReport(table);
+        const report = buildAuditReport(table, { enabledDetectorIds });
 
         return {
           index: index + 1,
@@ -618,6 +651,16 @@ export class DataCheckCommandFactory {
     }
   }
 
+  private static showDisabledMessage() {
+    new ztoolkit.ProgressWindow(addon.data.config.addonName)
+      .createLine({
+        text: getString("command-disabled"),
+        type: "default",
+        progress: 100,
+      })
+      .show();
+  }
+
   private static showAuditReportDialog(
     table: TableDocument,
     report: AuditReport,
@@ -707,7 +750,11 @@ export class DataCheckCommandFactory {
   ): string {
     const visualizationModel = buildReportVisualizationModel(table);
     const sourceLabel = this.getSourceLabel(table.source);
-    const detectorMarkup = report.detectorResults
+    const benfordEnabled = report.detectorResults.some(
+      (detectorResult) => detectorResult.detectorId === "benford-deviation",
+    );
+    const detectorMarkup = report.detectorResults.length
+      ? report.detectorResults
       .map((detectorResult) => {
         const toneClass =
           detectorResult.severity === "warning"
@@ -736,7 +783,8 @@ export class DataCheckCommandFactory {
           ${findingPreview}
         </article>`;
       })
-      .join("");
+      .join("")
+      : `<div class="dc-empty-state">${escapeHtml(getString("report-empty-detectors"))}</div>`;
     const flattenedFindings = report.detectorResults.flatMap(
       (detectorResult) => {
         return detectorResult.findings.map((finding) => ({
@@ -782,7 +830,7 @@ export class DataCheckCommandFactory {
         <section class="dc-section">
           <div class="dc-section-title">${escapeHtml(getString("report-section-visuals"))}</div>
           <div class="dc-visual-grid">
-            ${this.renderLeadingDigitPanel(visualizationModel)}
+            ${benfordEnabled ? this.renderLeadingDigitPanel(visualizationModel) : ""}
             ${this.renderColumnProfilePanel(visualizationModel)}
           </div>
         </section>
@@ -1638,24 +1686,12 @@ function toSegmentWidth(count: number, total: number): string {
 }
 
 function getDetectorTitle(detectorId: string): string {
-  switch (detectorId) {
-    case "duplicate-rows":
-      return getString("detector-title-duplicate-rows");
-    case "duplicate-numeric-sequences":
-      return getString("detector-title-duplicate-numeric-sequences");
-    case "benford-deviation":
-      return getString("detector-title-benford-deviation");
-    case "repeated-numeric-columns":
-      return getString("detector-title-repeated-numeric-columns");
-    case "uniform-numeric-columns":
-      return getString("detector-title-uniform-numeric-columns");
-    case "invalid-percentages":
-      return getString("detector-title-invalid-percentages");
-    case "invalid-p-values":
-      return getString("detector-title-invalid-p-values");
-    default:
-      return humanizeDetectorId(detectorId);
+  const detector = getAuditDetectorPreferenceDefinition(detectorId);
+  if (detector) {
+    return getString(detector.titleL10nId);
   }
+
+  return humanizeDetectorId(detectorId);
 }
 
 function getSeverityLabel(

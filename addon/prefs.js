@@ -1,2 +1,14 @@
 pref("enable", true);
 pref("input", "Manual table selection bootstrap");
+pref("detectorDuplicateRows", true);
+pref("detectorNearDuplicateRows", true);
+pref("detectorDuplicateNumericSequences", true);
+pref("detectorBenfordDeviation", true);
+pref("detectorTerminalDigitPreference", true);
+pref("detectorRoundingHeaping", true);
+pref("detectorPValueThresholdClustering", true);
+pref("detectorRepeatedNumericColumns", true);
+pref("detectorUniformNumericColumns", true);
+pref("detectorLowVarianceNumericColumns", true);
+pref("detectorInvalidPercentages", true);
+pref("detectorInvalidPValues", true);

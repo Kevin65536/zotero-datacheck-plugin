@@ -2,9 +2,12 @@ import type {
   AuditReport,
   DetectorFinding,
   DetectorResult,
+  ParsedNumericValue,
+  TableCell,
   TableDocument,
   TableRow,
 } from "./types";
+import type { AuditDetectorId } from "./detectors";
 import { getString } from "../../utils/locale";
 
 export interface BenfordDigitBin {
@@ -23,24 +26,65 @@ export interface BenfordProfile {
 
 type Detector = (table: TableDocument) => DetectorResult;
 
+interface BuildAuditReportOptions {
+  enabledDetectorIds?: AuditDetectorId[];
+}
+
+interface DetectorDefinition {
+  id: AuditDetectorId;
+  run: Detector;
+}
+
 const BENFORD_EXPECTED_RATIOS = [
   0.301, 0.176, 0.125, 0.097, 0.079, 0.067, 0.058, 0.051, 0.046,
 ];
 const BENFORD_MIN_SAMPLE_COUNT = 20;
 const BENFORD_WARNING_MAD_THRESHOLD = 0.015;
 
-const DETECTORS: Detector[] = [
-  detectDuplicateRows,
-  detectDuplicateNumericSequences,
-  detectBenfordDeviation,
-  detectRepeatedNumericColumns,
-  detectUniformNumericColumns,
-  detectInvalidPercentages,
-  detectInvalidPValues,
+const TERMINAL_DIGIT_MIN_SAMPLE_COUNT = 20;
+const TERMINAL_DIGIT_CHI_SQUARE_THRESHOLD = 16.92;
+const ROUNDING_HEAP_MIN_SAMPLE_COUNT = 10;
+const ROUNDING_HEAP_RATIO_THRESHOLD = 0.7;
+const PVALUE_CLUSTER_MIN_SAMPLE_COUNT = 6;
+const LOW_VARIANCE_MIN_SAMPLE_COUNT = 5;
+const LOW_VARIANCE_CV_THRESHOLD = 0.02;
+const LOW_VARIANCE_RANGE_RATIO_THRESHOLD = 0.05;
+const MAX_NEAR_DUPLICATE_FINDINGS = 12;
+
+const DETECTORS: readonly DetectorDefinition[] = [
+  { id: "duplicate-rows", run: detectDuplicateRows },
+  { id: "near-duplicate-rows", run: detectNearDuplicateRows },
+  {
+    id: "duplicate-numeric-sequences",
+    run: detectDuplicateNumericSequences,
+  },
+  { id: "benford-deviation", run: detectBenfordDeviation },
+  {
+    id: "terminal-digit-preference",
+    run: detectTerminalDigitPreference,
+  },
+  { id: "rounding-heaping", run: detectRoundingHeaping },
+  {
+    id: "p-value-threshold-clustering",
+    run: detectPValueThresholdClustering,
+  },
+  { id: "repeated-numeric-columns", run: detectRepeatedNumericColumns },
+  { id: "uniform-numeric-columns", run: detectUniformNumericColumns },
+  {
+    id: "low-variance-numeric-columns",
+    run: detectLowVarianceNumericColumns,
+  },
+  { id: "invalid-percentages", run: detectInvalidPercentages },
+  { id: "invalid-p-values", run: detectInvalidPValues },
 ];
 
-export function buildAuditReport(table: TableDocument): AuditReport {
-  const detectorResults = DETECTORS.map((detector) => detector(table));
+export function buildAuditReport(
+  table: TableDocument,
+  options: BuildAuditReportOptions = {},
+): AuditReport {
+  const detectorResults = resolveEnabledDetectors(options.enabledDetectorIds).map(
+    (detector) => detector.run(table),
+  );
   const findingCount = detectorResults.reduce((count, detectorResult) => {
     return count + detectorResult.findings.length;
   }, 0);
@@ -176,6 +220,78 @@ function detectDuplicateRows(table: TableDocument): DetectorResult {
   };
 }
 
+function detectNearDuplicateRows(table: TableDocument): DetectorResult {
+  const analyzedRows = getAnalyzedRows(table);
+  const findings: DetectorFinding[] = [];
+
+  for (let leftIndex = 0; leftIndex < analyzedRows.length; leftIndex += 1) {
+    for (
+      let rightIndex = leftIndex + 1;
+      rightIndex < analyzedRows.length;
+      rightIndex += 1
+    ) {
+      const comparison = compareRows(
+        analyzedRows[leftIndex],
+        analyzedRows[rightIndex],
+      );
+      if (
+        comparison.comparedCellCount < 4 ||
+        comparison.matchingCellCount === comparison.comparedCellCount ||
+        comparison.matchingCellCount < comparison.comparedCellCount - 1
+      ) {
+        continue;
+      }
+
+      const similarity =
+        comparison.matchingCellCount / comparison.comparedCellCount;
+      const hasMatchingNumericBackbone =
+        comparison.comparedNumericCellCount >= 2 &&
+        comparison.matchingNumericCellCount ===
+          comparison.comparedNumericCellCount &&
+        comparison.differingColumnIndices.length <= 2;
+      if (!hasMatchingNumericBackbone && similarity < 0.8) {
+        continue;
+      }
+
+      findings.push({
+        message: getString("audit-detector-near-duplicate-rows-finding", {
+          args: {
+            left: analyzedRows[leftIndex].index + 1,
+            right: analyzedRows[rightIndex].index + 1,
+            matches: comparison.matchingCellCount,
+            total: comparison.comparedCellCount,
+            columns: comparison.differingColumnIndices
+              .map((columnIndex) => formatColumnLabel(table, columnIndex))
+              .join(", "),
+          },
+        }),
+        rowIndices: [analyzedRows[leftIndex].index, analyzedRows[rightIndex].index],
+        columnIndices: comparison.differingColumnIndices,
+      });
+
+      if (findings.length >= MAX_NEAR_DUPLICATE_FINDINGS) {
+        break;
+      }
+    }
+
+    if (findings.length >= MAX_NEAR_DUPLICATE_FINDINGS) {
+      break;
+    }
+  }
+
+  return {
+    detectorId: "near-duplicate-rows",
+    applicability: analyzedRows.length >= 2 ? "applied" : "skipped",
+    severity: findings.length ? "warning" : "info",
+    summary: findings.length
+      ? getString("audit-detector-near-duplicate-rows-summary-hit", {
+          args: { count: findings.length },
+        })
+      : getString("audit-detector-near-duplicate-rows-summary-clear"),
+    findings,
+  };
+}
+
 function detectDuplicateNumericSequences(table: TableDocument): DetectorResult {
   const groupedRows = groupRowsBySignature(getAnalyzedRows(table), (row) => {
     const numericSequence = row.cells
@@ -274,6 +390,239 @@ function detectBenfordDeviation(table: TableDocument): DetectorResult {
             mad: formatMad(profile.mad),
             count: profile.sampleCount,
           },
+        }),
+    findings,
+  };
+}
+
+function detectTerminalDigitPreference(table: TableDocument): DetectorResult {
+  const digitCounts = Array.from({ length: 10 }, () => 0);
+
+  for (const cell of getNonPValueNumericCells(table)) {
+    const terminalDigit = getTerminalDigit(cell.normalizedText);
+    if (terminalDigit === undefined) {
+      continue;
+    }
+
+    digitCounts[terminalDigit] += 1;
+  }
+
+  const sampleCount = digitCounts.reduce((count, value) => count + value, 0);
+  if (sampleCount < TERMINAL_DIGIT_MIN_SAMPLE_COUNT) {
+    return {
+      detectorId: "terminal-digit-preference",
+      applicability: "skipped",
+      severity: "info",
+      summary: getString("audit-detector-terminal-digit-summary-skip", {
+        args: {
+          count: sampleCount,
+          minimum: TERMINAL_DIGIT_MIN_SAMPLE_COUNT,
+        },
+      }),
+      findings: [],
+    };
+  }
+
+  const chiSquare = computeUniformChiSquare(digitCounts);
+  const topDigits = digitCounts
+    .map((count, digit) => ({
+      digit,
+      count,
+      ratio: count / sampleCount,
+    }))
+    .sort((left, right) => right.count - left.count)
+    .slice(0, 3)
+    .map(
+      (entry) => `${entry.digit} (${formatRatio(entry.ratio)})`,
+    )
+    .join(", ");
+  const findings: DetectorFinding[] =
+    chiSquare >= TERMINAL_DIGIT_CHI_SQUARE_THRESHOLD
+      ? [
+          {
+            message: getString(
+              "audit-detector-terminal-digit-finding",
+              {
+                args: {
+                  digits: topDigits,
+                  chiSquare: formatStatistic(chiSquare),
+                  count: sampleCount,
+                },
+              },
+            ),
+            evidence: topDigits ? [topDigits] : undefined,
+          },
+        ]
+      : [];
+
+  return {
+    detectorId: "terminal-digit-preference",
+    applicability: "applied",
+    severity: findings.length ? "warning" : "info",
+    summary: findings.length
+      ? getString("audit-detector-terminal-digit-summary-hit", {
+          args: {
+            chiSquare: formatStatistic(chiSquare),
+            count: sampleCount,
+          },
+        })
+      : getString("audit-detector-terminal-digit-summary-clear", {
+          args: {
+            chiSquare: formatStatistic(chiSquare),
+            count: sampleCount,
+          },
+        }),
+    findings,
+  };
+}
+
+function detectRoundingHeaping(table: TableDocument): DetectorResult {
+  let integerCount = 0;
+  let integerRoundedCount = 0;
+  let decimalCount = 0;
+  let decimalRoundedCount = 0;
+  let decimalZeroCount = 0;
+  let decimalFiveCount = 0;
+
+  for (const cell of getNonPValueNumericCells(table)) {
+    const numericText = stripPercentageSuffix(cell.normalizedText);
+    if (numericText.includes(".")) {
+      decimalCount += 1;
+      const decimalPart = numericText.split(".")[1] ?? "";
+      if (/^0+$/.test(decimalPart)) {
+        decimalRoundedCount += 1;
+        decimalZeroCount += 1;
+      } else if (/^50*$/.test(decimalPart)) {
+        decimalRoundedCount += 1;
+        decimalFiveCount += 1;
+      }
+      continue;
+    }
+
+    integerCount += 1;
+    if (Number.isInteger(cell.parsedNumeric?.value) && isMultipleOfFive(cell)) {
+      integerRoundedCount += 1;
+    }
+  }
+
+  const findings: DetectorFinding[] = [];
+  const applicable =
+    integerCount >= ROUNDING_HEAP_MIN_SAMPLE_COUNT ||
+    decimalCount >= ROUNDING_HEAP_MIN_SAMPLE_COUNT;
+
+  if (
+    integerCount >= ROUNDING_HEAP_MIN_SAMPLE_COUNT &&
+    integerRoundedCount / integerCount >= ROUNDING_HEAP_RATIO_THRESHOLD
+  ) {
+    findings.push({
+      message: getString("audit-detector-rounding-heaping-finding-integer", {
+        args: {
+          count: integerRoundedCount,
+          total: integerCount,
+          ratio: formatRatio(integerRoundedCount / integerCount),
+        },
+      }),
+    });
+  }
+
+  if (
+    decimalCount >= ROUNDING_HEAP_MIN_SAMPLE_COUNT &&
+    decimalRoundedCount / decimalCount >= ROUNDING_HEAP_RATIO_THRESHOLD
+  ) {
+    findings.push({
+      message: getString("audit-detector-rounding-heaping-finding-decimal", {
+        args: {
+          count: decimalRoundedCount,
+          total: decimalCount,
+          ratio: formatRatio(decimalRoundedCount / decimalCount),
+          zeroCount: decimalZeroCount,
+          fiveCount: decimalFiveCount,
+        },
+      }),
+    });
+  }
+
+  return {
+    detectorId: "rounding-heaping",
+    applicability: applicable ? "applied" : "skipped",
+    severity: findings.length ? "warning" : "info",
+    summary: !applicable
+      ? getString("audit-detector-rounding-heaping-summary-skip", {
+          args: { minimum: ROUNDING_HEAP_MIN_SAMPLE_COUNT },
+        })
+      : findings.length
+        ? getString("audit-detector-rounding-heaping-summary-hit", {
+            args: { count: findings.length },
+          })
+        : getString("audit-detector-rounding-heaping-summary-clear"),
+    findings,
+  };
+}
+
+function detectPValueThresholdClustering(table: TableDocument): DetectorResult {
+  const exactPValues = getPValueCells(table)
+    .map((cell) => cell.parsedNumeric)
+    .filter((value): value is ParsedNumericValue => value?.kind === "p-value")
+    .filter((value) => !value.comparator || value.comparator === "=")
+    .map((value) => value.value)
+    .filter((value) => value >= 0.04 && value <= 0.06);
+
+  if (exactPValues.length < PVALUE_CLUSTER_MIN_SAMPLE_COUNT) {
+    return {
+      detectorId: "p-value-threshold-clustering",
+      applicability: "skipped",
+      severity: "info",
+      summary: getString("audit-detector-pvalue-clustering-summary-skip", {
+        args: {
+          count: exactPValues.length,
+          minimum: PVALUE_CLUSTER_MIN_SAMPLE_COUNT,
+        },
+      }),
+      findings: [],
+    };
+  }
+
+  const leftCount = exactPValues.filter(
+    (value) => value >= 0.045 && value < 0.05,
+  ).length;
+  const exactCount = exactPValues.filter(
+    (value) => Math.abs(value - 0.05) < 1e-9,
+  ).length;
+  const rightCount = exactPValues.filter(
+    (value) => value > 0.05 && value <= 0.055,
+  ).length;
+  const suspiciousCount = leftCount + exactCount;
+  const findings: DetectorFinding[] =
+    suspiciousCount >= 4 &&
+    suspiciousCount >= rightCount + 2 &&
+    suspiciousCount / exactPValues.length >= 0.5
+      ? [
+          {
+            message: getString(
+              "audit-detector-pvalue-clustering-finding",
+              {
+                args: {
+                  left: leftCount,
+                  exact: exactCount,
+                  right: rightCount,
+                  total: exactPValues.length,
+                },
+              },
+            ),
+          },
+        ]
+      : [];
+
+  return {
+    detectorId: "p-value-threshold-clustering",
+    applicability: "applied",
+    severity: findings.length ? "warning" : "info",
+    summary: findings.length
+      ? getString("audit-detector-pvalue-clustering-summary-hit", {
+          args: { count: exactPValues.length },
+        })
+      : getString("audit-detector-pvalue-clustering-summary-clear", {
+          args: { count: exactPValues.length },
         }),
     findings,
   };
@@ -468,8 +817,85 @@ function detectUniformNumericColumns(table: TableDocument): DetectorResult {
   };
 }
 
+function detectLowVarianceNumericColumns(table: TableDocument): DetectorResult {
+  const analyzedRows = getAnalyzedRows(table);
+  const findings: DetectorFinding[] = [];
+
+  for (let columnIndex = 0; columnIndex < table.columnCount; columnIndex += 1) {
+    const numericCells = analyzedRows
+      .map((row) => row.cells[columnIndex])
+      .filter((cell) => {
+        const kind = cell?.parsedNumeric?.kind;
+        return kind === "number" || kind === "percentage";
+      });
+
+    if (numericCells.length < LOW_VARIANCE_MIN_SAMPLE_COUNT) {
+      continue;
+    }
+
+    const values = numericCells.map((cell) => cell.parsedNumeric!.value);
+    const uniqueCount = new Set(
+      numericCells.map((cell) => cell.parsedNumeric!.normalizedText),
+    ).size;
+    if (uniqueCount < 3) {
+      continue;
+    }
+
+    const mean = computeMean(values);
+    const standardDeviation = computeStandardDeviation(values, mean);
+    const maxValue = Math.max(...values);
+    const minValue = Math.min(...values);
+    const scale = Math.max(Math.abs(mean), 1e-6);
+    const coefficientOfVariation = standardDeviation / scale;
+    const rangeRatio = (maxValue - minValue) / scale;
+
+    if (
+      coefficientOfVariation > LOW_VARIANCE_CV_THRESHOLD ||
+      rangeRatio > LOW_VARIANCE_RANGE_RATIO_THRESHOLD
+    ) {
+      continue;
+    }
+
+    findings.push({
+      message: getString("audit-detector-low-variance-columns-finding", {
+        args: {
+          column: formatColumnLabel(table, columnIndex),
+          count: numericCells.length,
+          unique: uniqueCount,
+          cv: formatStatistic(coefficientOfVariation, 3),
+          range: formatStatistic(maxValue - minValue, 3),
+        },
+      }),
+      columnIndices: [columnIndex],
+    });
+  }
+
+  return {
+    detectorId: "low-variance-numeric-columns",
+    applicability: analyzedRows.length >= LOW_VARIANCE_MIN_SAMPLE_COUNT ? "applied" : "skipped",
+    severity: findings.length ? "info" : "info",
+    summary: findings.length
+      ? getString("audit-detector-low-variance-columns-summary-hit", {
+          args: { count: findings.length },
+        })
+      : getString("audit-detector-low-variance-columns-summary-clear"),
+    findings,
+  };
+}
+
 function getAnalyzedRows(table: TableDocument): TableRow[] {
   return table.rows.filter((row) => row.index !== table.headerRowIndex);
+}
+
+function resolveEnabledDetectors(
+  enabledDetectorIds: AuditDetectorId[] | undefined,
+): readonly DetectorDefinition[] {
+  if (enabledDetectorIds === undefined) {
+    return DETECTORS;
+  }
+
+  const enabledSet = new Set(enabledDetectorIds);
+  return DETECTORS.filter((detector) => enabledSet.has(detector.id));
 }
 
 function groupRowsBySignature(
@@ -508,6 +934,67 @@ function groupedRowsToFindings(
   return findings;
 }
 
+function compareRows(left: TableRow, right: TableRow) {
+  let comparedCellCount = 0;
+  let matchingCellCount = 0;
+  let comparedNumericCellCount = 0;
+  let matchingNumericCellCount = 0;
+  const differingColumnIndices: number[] = [];
+
+  for (let columnIndex = 0; columnIndex < left.cells.length; columnIndex += 1) {
+    const leftCell = left.cells[columnIndex];
+    const rightCell = right.cells[columnIndex];
+    const leftValue = left.cells[columnIndex]?.normalizedText ?? "";
+    const rightValue = right.cells[columnIndex]?.normalizedText ?? "";
+    if (!leftValue && !rightValue) {
+      continue;
+    }
+
+    comparedCellCount += 1;
+    if (leftCell?.parsedNumeric && rightCell?.parsedNumeric) {
+      comparedNumericCellCount += 1;
+      if (leftValue === rightValue) {
+        matchingNumericCellCount += 1;
+      }
+    }
+
+    if (leftValue === rightValue) {
+      matchingCellCount += 1;
+    } else {
+      differingColumnIndices.push(columnIndex);
+    }
+  }
+
+  return {
+    comparedCellCount,
+    matchingCellCount,
+    comparedNumericCellCount,
+    matchingNumericCellCount,
+    differingColumnIndices,
+  };
+}
+
+function getPlainNumericCells(table: TableDocument): TableCell[] {
+  return getAnalyzedRows(table)
+    .flatMap((row) => row.cells)
+    .filter((cell) => cell.parsedNumeric?.kind === "number");
+}
+
+function getNonPValueNumericCells(table: TableDocument): TableCell[] {
+  return getAnalyzedRows(table)
+    .flatMap((row) => row.cells)
+    .filter((cell) => {
+      const kind = cell.parsedNumeric?.kind;
+      return kind === "number" || kind === "percentage";
+    });
+}
+
+function getPValueCells(table: TableDocument): TableCell[] {
+  return getAnalyzedRows(table)
+    .flatMap((row) => row.cells)
+    .filter((cell) => cell.parsedNumeric?.kind === "p-value");
+}
+
 function getLeadingDigit(value: number): number | undefined {
   const absoluteValue = Math.abs(value);
   if (!Number.isFinite(absoluteValue) || absoluteValue === 0) {
@@ -518,8 +1005,57 @@ function getLeadingDigit(value: number): number | undefined {
   return match ? Number(match[1]) : undefined;
 }
 
+function getTerminalDigit(text: string): number | undefined {
+  const digits = stripPercentageSuffix(text).replace(/\D/g, "");
+  if (!digits.length) {
+    return undefined;
+  }
+
+  return Number(digits[digits.length - 1]);
+}
+
+function stripPercentageSuffix(text: string): string {
+  return text.endsWith("%") ? text.slice(0, -1) : text;
+}
+
+function isMultipleOfFive(cell: TableCell): boolean {
+  const value = cell.parsedNumeric?.value;
+  if (value === undefined) {
+    return false;
+  }
+
+  return Math.abs(value % 5) < 1e-9;
+}
+
+function computeUniformChiSquare(observedCounts: number[]): number {
+  const totalCount = observedCounts.reduce((sum, count) => sum + count, 0);
+  if (!totalCount) {
+    return 0;
+  }
+
+  const expectedCount = totalCount / observedCounts.length;
+  return observedCounts.reduce((sum, observedCount) => {
+    return sum + (observedCount - expectedCount) ** 2 / expectedCount;
+  }, 0);
+}
+
+function computeMean(values: number[]): number {
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function computeStandardDeviation(values: number[], mean: number): number {
+  return Math.sqrt(
+    values.reduce((sum, value) => sum + (value - mean) ** 2, 0) /
+      values.length,
+  );
+}
+
 function formatRatio(ratio: number): string {
   return `${(ratio * 100).toFixed(1)}%`;
+}
+
+function formatStatistic(value: number, fractionDigits = 2): string {
+  return value.toFixed(fractionDigits);
 }
 
 function formatMad(mad: number): string {
