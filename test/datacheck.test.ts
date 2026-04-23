@@ -823,9 +823,7 @@ describe("datacheck", function () {
           ].join("\n"),
         ),
       );
-      const enabledDetectorIds: AuditDetectorId[] = [
-        "invalid-percentages",
-      ];
+      const enabledDetectorIds: AuditDetectorId[] = ["invalid-percentages"];
       const report = buildAuditReport(table, { enabledDetectorIds });
 
       assert.lengthOf(report.detectorResults, 1);

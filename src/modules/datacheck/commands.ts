@@ -405,7 +405,7 @@ export class DataCheckCommandFactory {
       }
 
       const draft = createTableSelectionDraft(context);
-  const enabledDetectorIds = getEnabledAuditDetectorIds();
+      const enabledDetectorIds = getEnabledAuditDetectorIds();
       if (!draft.selectedTextLength) {
         new ztoolkit.ProgressWindow(addon.data.config.addonName)
           .createLine({
@@ -418,7 +418,7 @@ export class DataCheckCommandFactory {
       }
 
       const table = parseTableSelection(draft);
-  const report = buildAuditReport(table, { enabledDetectorIds });
+      const report = buildAuditReport(table, { enabledDetectorIds });
 
       addon.data.dataCheck.lastReaderContext = context;
       addon.data.dataCheck.lastSelectionDraft = draft;
@@ -755,21 +755,21 @@ export class DataCheckCommandFactory {
     );
     const detectorMarkup = report.detectorResults.length
       ? report.detectorResults
-      .map((detectorResult) => {
-        const toneClass =
-          detectorResult.severity === "warning"
-            ? "dc-detector-warning"
-            : "dc-detector-info";
-        const findingPreview = detectorResult.findings.length
-          ? `<div class="dc-preview-list">${detectorResult.findings
-              .slice(0, 3)
-              .map(
-                (finding) =>
-                  `<div class="dc-preview-item">${escapeHtml(finding.message)}</div>`,
-              )
-              .join("")}</div>`
-          : "";
-        return `<article class="dc-detector-card ${toneClass}">
+          .map((detectorResult) => {
+            const toneClass =
+              detectorResult.severity === "warning"
+                ? "dc-detector-warning"
+                : "dc-detector-info";
+            const findingPreview = detectorResult.findings.length
+              ? `<div class="dc-preview-list">${detectorResult.findings
+                  .slice(0, 3)
+                  .map(
+                    (finding) =>
+                      `<div class="dc-preview-item">${escapeHtml(finding.message)}</div>`,
+                  )
+                  .join("")}</div>`
+              : "";
+            return `<article class="dc-detector-card ${toneClass}">
           <div class="dc-detector-head">
             <div>
               <div class="dc-detector-title">${escapeHtml(getDetectorTitle(detectorResult.detectorId))}</div>
@@ -782,8 +782,8 @@ export class DataCheckCommandFactory {
           </div>
           ${findingPreview}
         </article>`;
-      })
-      .join("")
+          })
+          .join("")
       : `<div class="dc-empty-state">${escapeHtml(getString("report-empty-detectors"))}</div>`;
     const flattenedFindings = report.detectorResults.flatMap(
       (detectorResult) => {

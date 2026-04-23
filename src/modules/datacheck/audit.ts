@@ -82,9 +82,9 @@ export function buildAuditReport(
   table: TableDocument,
   options: BuildAuditReportOptions = {},
 ): AuditReport {
-  const detectorResults = resolveEnabledDetectors(options.enabledDetectorIds).map(
-    (detector) => detector.run(table),
-  );
+  const detectorResults = resolveEnabledDetectors(
+    options.enabledDetectorIds,
+  ).map((detector) => detector.run(table));
   const findingCount = detectorResults.reduce((count, detectorResult) => {
     return count + detectorResult.findings.length;
   }, 0);
@@ -265,7 +265,10 @@ function detectNearDuplicateRows(table: TableDocument): DetectorResult {
               .join(", "),
           },
         }),
-        rowIndices: [analyzedRows[leftIndex].index, analyzedRows[rightIndex].index],
+        rowIndices: [
+          analyzedRows[leftIndex].index,
+          analyzedRows[rightIndex].index,
+        ],
         columnIndices: comparison.differingColumnIndices,
       });
 
@@ -432,24 +435,19 @@ function detectTerminalDigitPreference(table: TableDocument): DetectorResult {
     }))
     .sort((left, right) => right.count - left.count)
     .slice(0, 3)
-    .map(
-      (entry) => `${entry.digit} (${formatRatio(entry.ratio)})`,
-    )
+    .map((entry) => `${entry.digit} (${formatRatio(entry.ratio)})`)
     .join(", ");
   const findings: DetectorFinding[] =
     chiSquare >= TERMINAL_DIGIT_CHI_SQUARE_THRESHOLD
       ? [
           {
-            message: getString(
-              "audit-detector-terminal-digit-finding",
-              {
-                args: {
-                  digits: topDigits,
-                  chiSquare: formatStatistic(chiSquare),
-                  count: sampleCount,
-                },
+            message: getString("audit-detector-terminal-digit-finding", {
+              args: {
+                digits: topDigits,
+                chiSquare: formatStatistic(chiSquare),
+                count: sampleCount,
               },
-            ),
+            }),
             evidence: topDigits ? [topDigits] : undefined,
           },
         ]
@@ -598,17 +596,14 @@ function detectPValueThresholdClustering(table: TableDocument): DetectorResult {
     suspiciousCount / exactPValues.length >= 0.5
       ? [
           {
-            message: getString(
-              "audit-detector-pvalue-clustering-finding",
-              {
-                args: {
-                  left: leftCount,
-                  exact: exactCount,
-                  right: rightCount,
-                  total: exactPValues.length,
-                },
+            message: getString("audit-detector-pvalue-clustering-finding", {
+              args: {
+                left: leftCount,
+                exact: exactCount,
+                right: rightCount,
+                total: exactPValues.length,
               },
-            ),
+            }),
           },
         ]
       : [];
@@ -872,7 +867,10 @@ function detectLowVarianceNumericColumns(table: TableDocument): DetectorResult {
 
   return {
     detectorId: "low-variance-numeric-columns",
-    applicability: analyzedRows.length >= LOW_VARIANCE_MIN_SAMPLE_COUNT ? "applied" : "skipped",
+    applicability:
+      analyzedRows.length >= LOW_VARIANCE_MIN_SAMPLE_COUNT
+        ? "applied"
+        : "skipped",
     severity: findings.length ? "info" : "info",
     summary: findings.length
       ? getString("audit-detector-low-variance-columns-summary-hit", {
@@ -1045,8 +1043,7 @@ function computeMean(values: number[]): number {
 
 function computeStandardDeviation(values: number[], mean: number): number {
   return Math.sqrt(
-    values.reduce((sum, value) => sum + (value - mean) ** 2, 0) /
-      values.length,
+    values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length,
   );
 }
 

@@ -82,8 +82,7 @@ export const AUDIT_DETECTOR_PREFERENCES = [
   },
 ] as const;
 
-export type AuditDetectorId =
-  (typeof AUDIT_DETECTOR_PREFERENCES)[number]["id"];
+export type AuditDetectorId = (typeof AUDIT_DETECTOR_PREFERENCES)[number]["id"];
 
 export type AuditDetectorPrefKey =
   (typeof AUDIT_DETECTOR_PREFERENCES)[number]["prefKey"];
