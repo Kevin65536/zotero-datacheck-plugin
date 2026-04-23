@@ -779,6 +779,10 @@ describe("datacheck", function () {
       assert.exists(terminalDigitResult);
       assert.equal(terminalDigitResult?.severity, "warning");
       assert.lengthOf(terminalDigitResult?.findings ?? [], 1);
+      assert.notInclude(
+        terminalDigitResult?.findings[0]?.message ?? "",
+        "{$zeroFive}",
+      );
       assert.exists(roundingResult);
       assert.equal(roundingResult?.severity, "warning");
       assert.isAtLeast(roundingResult?.findings.length ?? 0, 1);

@@ -504,6 +504,8 @@ function detectTerminalDigitPreference(table: TableDocument): DetectorResult {
   }
 
   const chiSquare = computeUniformChiSquare(digitCounts);
+  const zeroFiveRatio =
+    ((digitCounts[0] ?? 0) + (digitCounts[5] ?? 0)) / sampleCount;
   const topDigits = digitCounts
     .map((count, digit) => ({
       digit,
@@ -522,6 +524,7 @@ function detectTerminalDigitPreference(table: TableDocument): DetectorResult {
               args: {
                 digits: topDigits,
                 chiSquare: formatStatistic(chiSquare),
+                zeroFive: formatRatio(zeroFiveRatio),
                 count: sampleCount,
               },
             }),
