@@ -1,6 +1,10 @@
 import { config } from "../../../package.json";
 import { getString } from "../../utils/locale";
-import { buildAuditReport, buildBenfordProfile } from "./audit";
+import {
+  buildAuditReport,
+  buildBenfordProfile,
+  buildTerminalDigitProfile,
+} from "./audit";
 import { getAuditDetectorPreferenceDefinition } from "./detectors";
 import { parseTableSelection } from "./parser";
 import {
@@ -25,8 +29,6 @@ const FILE_MENU_SEPARATOR_ID = `${config.addonRef}-file-menu-separator`;
 const FILE_MENU_ITEM_ID = `${config.addonRef}-file-menu-item`;
 const SELECTION_POPUP_BUTTON_ATTRIBUTE = `data-${config.addonRef}-selection-popup-action`;
 
-type NumericKindKey = "number" | "percentage" | "p-value";
-
 interface LeadingDigitBin {
   digit: number;
   observedCount: number;
@@ -34,19 +36,11 @@ interface LeadingDigitBin {
   expectedRatio: number;
 }
 
-interface NumericColumnProfile {
-  label: string;
-  total: number;
-  numberCount: number;
-  percentageCount: number;
-  pValueCount: number;
-}
-
 export interface ReportVisualizationModel {
   firstDigitBins: LeadingDigitBin[];
   firstDigitSampleCount: number;
-  columnProfiles: NumericColumnProfile[];
-  maxColumnTotal: number;
+  terminalDigitBins: LeadingDigitBin[];
+  terminalDigitSampleCount: number;
   numericCellCount: number;
 }
 
@@ -208,65 +202,7 @@ export function buildReportVisualizationModel(
   table: TableDocument,
 ): ReportVisualizationModel {
   const benfordProfile = buildBenfordProfile(table);
-  const dataRows = table.rows.filter(
-    (row) => row.index !== table.headerRowIndex,
-  );
-  const numericCells = dataRows.flatMap((row) => {
-    return row.cells.flatMap((cell) => {
-      const parsedNumeric = cell.parsedNumeric;
-      if (!parsedNumeric) {
-        return [];
-      }
-
-      return [
-        {
-          columnIndex: cell.columnIndex,
-          kind: parsedNumeric.kind as NumericKindKey,
-          value: parsedNumeric.value,
-        },
-      ];
-    });
-  });
-
-  const columnProfiles = Array.from(
-    { length: table.columnCount },
-    (_, columnIndex) => {
-      let numberCount = 0;
-      let percentageCount = 0;
-      let pValueCount = 0;
-
-      for (const numericCell of numericCells) {
-        if (numericCell.columnIndex !== columnIndex) {
-          continue;
-        }
-
-        switch (numericCell.kind) {
-          case "number":
-            numberCount += 1;
-            break;
-          case "percentage":
-            percentageCount += 1;
-            break;
-          case "p-value":
-            pValueCount += 1;
-            break;
-        }
-      }
-
-      const total = numberCount + percentageCount + pValueCount;
-      if (!total) {
-        return undefined;
-      }
-
-      return {
-        label: formatColumnLabel(table, columnIndex),
-        total,
-        numberCount,
-        percentageCount,
-        pValueCount,
-      };
-    },
-  ).filter((profile): profile is NumericColumnProfile => Boolean(profile));
+  const terminalDigitProfile = buildTerminalDigitProfile(table);
 
   return {
     firstDigitBins: benfordProfile.bins.map((bin) => ({
@@ -276,11 +212,14 @@ export function buildReportVisualizationModel(
       expectedRatio: bin.expectedRatio,
     })),
     firstDigitSampleCount: benfordProfile.sampleCount,
-    columnProfiles,
-    maxColumnTotal: columnProfiles.reduce((maxValue, profile) => {
-      return Math.max(maxValue, profile.total);
-    }, 0),
-    numericCellCount: numericCells.length,
+    terminalDigitBins: terminalDigitProfile.bins.map((bin) => ({
+      digit: bin.digit,
+      observedCount: bin.observedCount,
+      observedRatio: bin.observedRatio,
+      expectedRatio: bin.expectedRatio,
+    })),
+    terminalDigitSampleCount: terminalDigitProfile.sampleCount,
+    numericCellCount: table.numericCellCount,
   };
 }
 
@@ -753,6 +692,18 @@ export class DataCheckCommandFactory {
     const benfordEnabled = report.detectorResults.some(
       (detectorResult) => detectorResult.detectorId === "benford-deviation",
     );
+    const terminalDigitEnabled = report.detectorResults.some(
+      (detectorResult) =>
+        detectorResult.detectorId === "terminal-digit-preference",
+    );
+    const visualsMarkup = [
+      benfordEnabled ? this.renderLeadingDigitPanel(visualizationModel) : "",
+      terminalDigitEnabled
+        ? this.renderTerminalDigitPanel(visualizationModel)
+        : "",
+    ]
+      .filter(Boolean)
+      .join("");
     const detectorMarkup = report.detectorResults.length
       ? report.detectorResults
           .map((detectorResult) => {
@@ -830,8 +781,7 @@ export class DataCheckCommandFactory {
         <section class="dc-section">
           <div class="dc-section-title">${escapeHtml(getString("report-section-visuals"))}</div>
           <div class="dc-visual-grid">
-            ${benfordEnabled ? this.renderLeadingDigitPanel(visualizationModel) : ""}
-            ${this.renderColumnProfilePanel(visualizationModel)}
+            ${visualsMarkup || `<div class="dc-empty-state">${escapeHtml(getString("report-empty-visuals"))}</div>`}
           </div>
         </section>
 
@@ -1059,81 +1009,71 @@ export class DataCheckCommandFactory {
   private static renderLeadingDigitPanel(
     visualizationModel: ReportVisualizationModel,
   ): string {
-    const chartMarkup = visualizationModel.firstDigitSampleCount
-      ? visualizationModel.firstDigitBins
-          .map(
-            (bin) => `<div class="dc-chart-row">
-            <div class="dc-chart-row-head">
-              <span class="dc-chart-label">${bin.digit}</span>
-              <span class="dc-chart-value">${formatPercentage(bin.observedRatio)}</span>
-            </div>
-            <div class="dc-chart-track">
-              <div class="dc-chart-benchmark" style="width:${toTrackWidth(bin.expectedRatio)}"></div>
-              <div class="dc-chart-bar" style="width:${toTrackWidth(bin.observedRatio)}"></div>
-            </div>
-            <div class="dc-chart-caption">${escapeHtml(getString("report-visual-legend-expected"))} ${formatPercentage(bin.expectedRatio)} · ${bin.observedCount}</div>
-          </div>`,
-          )
-          .join("")
-      : `<div class="dc-empty-state">${escapeHtml(getString("report-visual-leading-digits-empty"))}</div>`;
+    return this.renderDigitDistributionPanel({
+      title: getString("report-visual-leading-digits-title"),
+      detail: getString("report-visual-leading-digits-detail"),
+      sampleCount: visualizationModel.firstDigitSampleCount,
+      bins: visualizationModel.firstDigitBins,
+      emptyState: getString("report-visual-leading-digits-empty"),
+    });
+  }
+
+  private static renderTerminalDigitPanel(
+    visualizationModel: ReportVisualizationModel,
+  ): string {
+    return this.renderDigitDistributionPanel({
+      title: getString("report-visual-terminal-digits-title"),
+      detail: getString("report-visual-terminal-digits-detail"),
+      sampleCount: visualizationModel.terminalDigitSampleCount,
+      bins: visualizationModel.terminalDigitBins,
+      emptyState: getString("report-visual-terminal-digits-empty"),
+    });
+  }
+
+  private static renderDigitDistributionPanel({
+    title,
+    detail,
+    sampleCount,
+    bins,
+    emptyState,
+  }: {
+    title: string;
+    detail: string;
+    sampleCount: number;
+    bins: LeadingDigitBin[];
+    emptyState: string;
+  }): string {
+    const maxRatio = bins.reduce((maxValue, bin) => {
+      return Math.max(maxValue, bin.observedRatio, bin.expectedRatio);
+    }, 0);
+    const chartMarkup = sampleCount
+      ? `<div class="dc-digit-chart">${bins
+          .map((bin) => {
+            return `<div class="dc-digit-bin">
+              <div class="dc-digit-bin-value">${formatPercentage(bin.observedRatio)}</div>
+              <div class="dc-digit-bin-track">
+                <div class="dc-digit-bin-expected" style="height:${toScaledPercent(bin.expectedRatio, maxRatio)}"></div>
+                <div class="dc-digit-bin-bar" style="height:${toScaledPercent(bin.observedRatio, maxRatio)}"></div>
+              </div>
+              <div class="dc-digit-bin-label">${bin.digit}</div>
+            </div>`;
+          })
+          .join("")}</div>`
+      : `<div class="dc-empty-state">${escapeHtml(emptyState)}</div>`;
 
     return `<article class="dc-panel">
       <div class="dc-panel-head">
         <div>
-          <div class="dc-panel-title">${escapeHtml(getString("report-visual-leading-digits-title"))}</div>
-          <div class="dc-panel-detail">${escapeHtml(getString("report-visual-leading-digits-detail"))}</div>
+          <div class="dc-panel-title">${escapeHtml(title)}</div>
+          <div class="dc-panel-detail">${escapeHtml(detail)}</div>
         </div>
-        <div class="dc-panel-meta">${escapeHtml(getString("report-visual-sample-count", { args: { count: visualizationModel.firstDigitSampleCount } }))}</div>
+        <div class="dc-panel-meta">${escapeHtml(getString("report-visual-sample-count", { args: { count: sampleCount } }))}</div>
       </div>
       <div class="dc-legend-row">
         ${this.renderLegendItem(getString("report-visual-legend-observed"), "dc-swatch-observed")}
         ${this.renderLegendItem(getString("report-visual-legend-expected"), "dc-swatch-expected")}
       </div>
-      <div class="dc-chart-list">${chartMarkup}</div>
-    </article>`;
-  }
-
-  private static renderColumnProfilePanel(
-    visualizationModel: ReportVisualizationModel,
-  ): string {
-    const chartMarkup = visualizationModel.columnProfiles.length
-      ? visualizationModel.columnProfiles
-          .map((profile) => {
-            const totalShare = visualizationModel.maxColumnTotal
-              ? profile.total / visualizationModel.maxColumnTotal
-              : 0;
-            return `<div class="dc-chart-row">
-              <div class="dc-chart-row-head">
-                <span class="dc-chart-label dc-chart-label-wide">${escapeHtml(profile.label)}</span>
-                <span class="dc-chart-value">${profile.total}</span>
-              </div>
-              <div class="dc-column-track">
-                <div class="dc-column-bar" style="width:${toTrackWidth(totalShare, 18)}">
-                  ${profile.numberCount ? `<span class="dc-column-segment dc-column-segment-number" style="width:${toSegmentWidth(profile.numberCount, profile.total)}"></span>` : ""}
-                  ${profile.percentageCount ? `<span class="dc-column-segment dc-column-segment-percentage" style="width:${toSegmentWidth(profile.percentageCount, profile.total)}"></span>` : ""}
-                  ${profile.pValueCount ? `<span class="dc-column-segment dc-column-segment-pvalue" style="width:${toSegmentWidth(profile.pValueCount, profile.total)}"></span>` : ""}
-                </div>
-              </div>
-              <div class="dc-chart-caption">${escapeHtml(getString("report-visual-column-caption", { args: { numbers: profile.numberCount, percentages: profile.percentageCount, pvalues: profile.pValueCount } }))}</div>
-            </div>`;
-          })
-          .join("")
-      : `<div class="dc-empty-state">${escapeHtml(getString("report-visual-column-profile-empty"))}</div>`;
-
-    return `<article class="dc-panel">
-      <div class="dc-panel-head">
-        <div>
-          <div class="dc-panel-title">${escapeHtml(getString("report-visual-column-profile-title"))}</div>
-          <div class="dc-panel-detail">${escapeHtml(getString("report-visual-column-profile-detail"))}</div>
-        </div>
-        <div class="dc-panel-meta">${escapeHtml(getString("report-visual-column-total", { args: { count: visualizationModel.numericCellCount } }))}</div>
-      </div>
-      <div class="dc-legend-row">
-        ${this.renderLegendItem(getString("report-visual-legend-number"), "dc-swatch-number")}
-        ${this.renderLegendItem(getString("report-visual-legend-percentage"), "dc-swatch-percentage")}
-        ${this.renderLegendItem(getString("report-visual-legend-pvalue"), "dc-swatch-pvalue")}
-      </div>
-      <div class="dc-chart-list">${chartMarkup}</div>
+      ${chartMarkup}
     </article>`;
   }
 
@@ -1372,7 +1312,7 @@ export class DataCheckCommandFactory {
       }
 
       .dc-visual-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
       }
 
       .dc-panel-head,
@@ -1484,6 +1424,70 @@ export class DataCheckCommandFactory {
       .dc-chart-value {
         font-weight: 800;
         color: var(--dc-text);
+      }
+
+      .dc-digit-chart {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(28px, 1fr));
+        gap: 10px;
+        align-items: end;
+        margin-top: 14px;
+      }
+
+      .dc-digit-bin {
+        display: grid;
+        gap: 8px;
+        align-items: end;
+        justify-items: center;
+      }
+
+      .dc-digit-bin-value,
+      .dc-digit-bin-label {
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .dc-digit-bin-value {
+        color: var(--dc-muted);
+        line-height: 1;
+      }
+
+      .dc-digit-bin-label {
+        color: var(--dc-text);
+      }
+
+      .dc-digit-bin-track {
+        position: relative;
+        width: 100%;
+        height: 128px;
+        padding: 8px 0;
+        display: flex;
+        align-items: flex-end;
+        justify-content: center;
+        overflow: hidden;
+        border-radius: 16px;
+        background: linear-gradient(180deg, rgba(148, 163, 184, 0.08) 0%, rgba(148, 163, 184, 0.18) 100%);
+      }
+
+      .dc-digit-bin-expected,
+      .dc-digit-bin-bar {
+        position: absolute;
+        bottom: 8px;
+        left: 50%;
+        transform: translateX(-50%);
+        border-radius: 14px 14px 8px 8px;
+      }
+
+      .dc-digit-bin-expected {
+        width: 70%;
+        background: var(--dc-expected);
+        border: 1px solid rgba(37, 99, 235, 0.18);
+      }
+
+      .dc-digit-bin-bar {
+        width: 40%;
+        background: var(--dc-observed);
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18) inset;
       }
 
       .dc-chart-track,
@@ -1635,7 +1639,7 @@ export class DataCheckCommandFactory {
         .dc-metrics,
         .dc-metrics-compact,
         .dc-visual-grid {
-          grid-template-columns: repeat(2, minmax(0, 1fr));
+          grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
         }
       }
 
@@ -1667,6 +1671,18 @@ function _getLeadingDigit(_value: number): number | undefined {
 
 function formatPercentage(ratio: number): string {
   return `${(ratio * 100).toFixed(1)}%`;
+}
+
+function toScaledPercent(
+  value: number,
+  maxValue: number,
+  minVisible = 7,
+): string {
+  if (value <= 0 || maxValue <= 0) {
+    return "0%";
+  }
+
+  return `${Math.min(100, Math.max((value / maxValue) * 100, minVisible))}%`;
 }
 
 function toTrackWidth(ratio: number, minVisible = 4): string {

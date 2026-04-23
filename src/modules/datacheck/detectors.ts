@@ -33,6 +33,12 @@ export const AUDIT_DETECTOR_PREFERENCES = [
     defaultEnabled: true,
   },
   {
+    id: "second-digit-benford-deviation",
+    prefKey: "detectorSecondDigitBenfordDeviation",
+    titleL10nId: "detector-title-second-digit-benford-deviation",
+    defaultEnabled: true,
+  },
+  {
     id: "terminal-digit-preference",
     prefKey: "detectorTerminalDigitPreference",
     titleL10nId: "detector-title-terminal-digit-preference",

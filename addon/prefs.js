@@ -4,6 +4,7 @@ pref("detectorDuplicateRows", true);
 pref("detectorNearDuplicateRows", true);
 pref("detectorDuplicateNumericSequences", true);
 pref("detectorBenfordDeviation", true);
+pref("detectorSecondDigitBenfordDeviation", true);
 pref("detectorTerminalDigitPreference", true);
 pref("detectorRoundingHeaping", true);
 pref("detectorPValueThresholdClustering", true);

@@ -13,6 +13,7 @@ declare namespace _ZoteroTypes {
       "detectorNearDuplicateRows": boolean;
       "detectorDuplicateNumericSequences": boolean;
       "detectorBenfordDeviation": boolean;
+      "detectorSecondDigitBenfordDeviation": boolean;
       "detectorTerminalDigitPreference": boolean;
       "detectorRoundingHeaping": boolean;
       "detectorPValueThresholdClustering": boolean;

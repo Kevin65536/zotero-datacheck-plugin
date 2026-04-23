@@ -38,8 +38,20 @@ interface DetectorDefinition {
 const BENFORD_EXPECTED_RATIOS = [
   0.301, 0.176, 0.125, 0.097, 0.079, 0.067, 0.058, 0.051, 0.046,
 ];
+const SECOND_DIGIT_BENFORD_EXPECTED_RATIOS = Array.from(
+  { length: 10 },
+  (_, digit) => {
+    let probability = 0;
+    for (let leadingDigit = 1; leadingDigit <= 9; leadingDigit += 1) {
+      probability += Math.log10(1 + 1 / (leadingDigit * 10 + digit));
+    }
+    return probability;
+  },
+);
+const TERMINAL_DIGIT_EXPECTED_RATIOS = Array.from({ length: 10 }, () => 0.1);
 const BENFORD_MIN_SAMPLE_COUNT = 20;
 const BENFORD_WARNING_MAD_THRESHOLD = 0.015;
+const SECOND_DIGIT_BENFORD_WARNING_MAD_THRESHOLD = 0.01;
 
 const TERMINAL_DIGIT_MIN_SAMPLE_COUNT = 20;
 const TERMINAL_DIGIT_CHI_SQUARE_THRESHOLD = 16.92;
@@ -59,6 +71,10 @@ const DETECTORS: readonly DetectorDefinition[] = [
     run: detectDuplicateNumericSequences,
   },
   { id: "benford-deviation", run: detectBenfordDeviation },
+  {
+    id: "second-digit-benford-deviation",
+    run: detectSecondDigitBenfordDeviation,
+  },
   {
     id: "terminal-digit-preference",
     run: detectTerminalDigitPreference,
@@ -108,46 +124,37 @@ export function buildAuditReport(
 }
 
 export function buildBenfordProfile(table: TableDocument): BenfordProfile {
-  const firstDigitCounts = Array.from({ length: 9 }, () => 0);
-
-  for (const row of getAnalyzedRows(table)) {
-    for (const cell of row.cells) {
-      if (cell.parsedNumeric?.kind !== "number") {
-        continue;
-      }
-
-      const leadingDigit = getLeadingDigit(cell.parsedNumeric.value);
-      if (!leadingDigit) {
-        continue;
-      }
-
-      firstDigitCounts[leadingDigit - 1] += 1;
-    }
-  }
-
-  const sampleCount = firstDigitCounts.reduce(
-    (count, value) => count + value,
-    0,
+  return buildDigitDistributionProfile(
+    getPlainNumericCells(table),
+    BENFORD_EXPECTED_RATIOS.map((_, index) => index + 1),
+    BENFORD_EXPECTED_RATIOS,
+    (cell) => getLeadingDigit(cell.parsedNumeric!.value),
   );
-  const bins = BENFORD_EXPECTED_RATIOS.map((expectedRatio, index) => {
-    const observedCount = firstDigitCounts[index];
-    const observedRatio = sampleCount ? observedCount / sampleCount : 0;
-    return {
-      digit: index + 1,
-      observedCount,
-      observedRatio,
-      expectedRatio,
-      absoluteDeviation: Math.abs(observedRatio - expectedRatio),
-    };
-  });
+}
 
-  return {
-    sampleCount,
-    mad: sampleCount
-      ? bins.reduce((sum, bin) => sum + bin.absoluteDeviation, 0) / bins.length
-      : 0,
-    bins,
-  };
+export function buildSecondDigitBenfordProfile(
+  table: TableDocument,
+): BenfordProfile {
+  return buildDigitDistributionProfile(
+    getPlainNumericCells(table),
+    SECOND_DIGIT_BENFORD_EXPECTED_RATIOS.map((_, index) => index),
+    SECOND_DIGIT_BENFORD_EXPECTED_RATIOS,
+    (cell) =>
+      getSecondSignificantDigit(
+        cell.parsedNumeric?.normalizedText ?? cell.normalizedText,
+      ),
+  );
+}
+
+export function buildTerminalDigitProfile(
+  table: TableDocument,
+): BenfordProfile {
+  return buildDigitDistributionProfile(
+    getNonPValueNumericCells(table),
+    TERMINAL_DIGIT_EXPECTED_RATIOS.map((_, index) => index),
+    TERMINAL_DIGIT_EXPECTED_RATIOS,
+    (cell) => getTerminalDigit(cell.normalizedText),
+  );
 }
 
 export function formatAuditReport(
@@ -389,6 +396,76 @@ function detectBenfordDeviation(table: TableDocument): DetectorResult {
           },
         })
       : getString("audit-detector-benford-summary-clear", {
+          args: {
+            mad: formatMad(profile.mad),
+            count: profile.sampleCount,
+          },
+        }),
+    findings,
+  };
+}
+
+function detectSecondDigitBenfordDeviation(
+  table: TableDocument,
+): DetectorResult {
+  const profile = buildSecondDigitBenfordProfile(table);
+  if (profile.sampleCount < BENFORD_MIN_SAMPLE_COUNT) {
+    return {
+      detectorId: "second-digit-benford-deviation",
+      applicability: "skipped",
+      severity: "info",
+      summary: getString("audit-detector-second-digit-benford-summary-skip", {
+        args: {
+          count: profile.sampleCount,
+          minimum: BENFORD_MIN_SAMPLE_COUNT,
+        },
+      }),
+      findings: [],
+    };
+  }
+
+  const dominantDigits = [...profile.bins]
+    .sort((left, right) => right.absoluteDeviation - left.absoluteDeviation)
+    .slice(0, 3)
+    .map((bin) => {
+      return getString("audit-detector-benford-digit-detail", {
+        args: {
+          digit: bin.digit,
+          observed: formatRatio(bin.observedRatio),
+          expected: formatRatio(bin.expectedRatio),
+        },
+      });
+    })
+    .join("; ");
+
+  const findings: DetectorFinding[] =
+    profile.mad >= SECOND_DIGIT_BENFORD_WARNING_MAD_THRESHOLD
+      ? [
+          {
+            message: getString("audit-detector-second-digit-benford-finding", {
+              args: {
+                digits: dominantDigits,
+                mad: formatMad(profile.mad),
+                count: profile.sampleCount,
+              },
+            }),
+            evidence: dominantDigits ? [dominantDigits] : undefined,
+          },
+        ]
+      : [];
+
+  return {
+    detectorId: "second-digit-benford-deviation",
+    applicability: "applied",
+    severity: findings.length ? "warning" : "info",
+    summary: findings.length
+      ? getString("audit-detector-second-digit-benford-summary-hit", {
+          args: {
+            mad: formatMad(profile.mad),
+            count: profile.sampleCount,
+          },
+        })
+      : getString("audit-detector-second-digit-benford-summary-clear", {
           args: {
             mad: formatMad(profile.mad),
             count: profile.sampleCount,
@@ -993,6 +1070,48 @@ function getPValueCells(table: TableDocument): TableCell[] {
     .filter((cell) => cell.parsedNumeric?.kind === "p-value");
 }
 
+function buildDigitDistributionProfile(
+  cells: TableCell[],
+  digits: number[],
+  expectedRatios: number[],
+  getDigit: (cell: TableCell) => number | undefined,
+): BenfordProfile {
+  const digitCounts = new Map(digits.map((digit) => [digit, 0] as const));
+
+  for (const cell of cells) {
+    const digit = getDigit(cell);
+    if (digit === undefined || !digitCounts.has(digit)) {
+      continue;
+    }
+
+    digitCounts.set(digit, (digitCounts.get(digit) ?? 0) + 1);
+  }
+
+  const sampleCount = digits.reduce((count, digit) => {
+    return count + (digitCounts.get(digit) ?? 0);
+  }, 0);
+  const bins = digits.map((digit, index) => {
+    const observedCount = digitCounts.get(digit) ?? 0;
+    const observedRatio = sampleCount ? observedCount / sampleCount : 0;
+    const expectedRatio = expectedRatios[index] ?? 0;
+    return {
+      digit,
+      observedCount,
+      observedRatio,
+      expectedRatio,
+      absoluteDeviation: Math.abs(observedRatio - expectedRatio),
+    };
+  });
+
+  return {
+    sampleCount,
+    mad: sampleCount
+      ? bins.reduce((sum, bin) => sum + bin.absoluteDeviation, 0) / bins.length
+      : 0,
+    bins,
+  };
+}
+
 function getLeadingDigit(value: number): number | undefined {
   const absoluteValue = Math.abs(value);
   if (!Number.isFinite(absoluteValue) || absoluteValue === 0) {
@@ -1001,6 +1120,15 @@ function getLeadingDigit(value: number): number | undefined {
 
   const match = absoluteValue.toExponential().match(/^([1-9])/);
   return match ? Number(match[1]) : undefined;
+}
+
+function getSecondSignificantDigit(text: string): number | undefined {
+  const digits = stripPercentageSuffix(text).replace(/\D/g, "").replace(/^0+/, "");
+  if (digits.length < 2) {
+    return undefined;
+  }
+
+  return Number(digits[1]);
 }
 
 function getTerminalDigit(text: string): number | undefined {

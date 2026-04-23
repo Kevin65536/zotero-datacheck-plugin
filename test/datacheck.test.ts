@@ -2,10 +2,12 @@ import { assert } from "chai";
 import { buildAuditReport } from "../src/modules/datacheck/audit";
 import type { AuditDetectorId } from "../src/modules/datacheck/detectors";
 import {
+  DataCheckCommandFactory,
   appendSelectionPopupAnalyzeButton,
   buildReportVisualizationModel,
   renderSelectionPopupAnalyzeAction,
 } from "../src/modules/datacheck/commands";
+import { getString } from "../src/utils/locale";
 import {
   debugScanActiveReaderForTables,
   detectTableDraftsFromPageEntries,
@@ -714,6 +716,30 @@ describe("datacheck", function () {
       assert.lengthOf(benfordResult?.findings ?? [], 1);
     });
 
+    it("flags second-digit Benford deviation when second digits are overly concentrated", function () {
+      const table = parseTableSelection(
+        createDraft(
+          [
+            "ID\tValue",
+            ...Array.from({ length: 20 }, (_, index) => {
+              const leadingDigit = (index % 9) + 1;
+              const magnitude = Math.floor(index / 9) + 1;
+              return `R${index + 1}\t${leadingDigit}${"0".repeat(magnitude)}`;
+            }),
+          ].join("\n"),
+        ),
+      );
+      const report = buildAuditReport(table);
+      const secondDigitResult = report.detectorResults.find(
+        (result) => result.detectorId === "second-digit-benford-deviation",
+      );
+
+      assert.exists(secondDigitResult);
+      assert.equal(secondDigitResult?.applicability, "applied");
+      assert.equal(secondDigitResult?.severity, "warning");
+      assert.lengthOf(secondDigitResult?.findings ?? [], 1);
+    });
+
     it("flags terminal digit preference and rounding heaping", function () {
       const table = parseTableSelection(
         createDraft(
@@ -989,7 +1015,7 @@ describe("datacheck", function () {
   });
 
   describe("datacheck report visuals", function () {
-    it("builds leading-digit and column-mix profiles for report charts", function () {
+    it("builds leading-digit and terminal-digit profiles for report charts", function () {
       const table = parseTableSelection(
         createDraft(
           [
@@ -1002,40 +1028,24 @@ describe("datacheck", function () {
       );
 
       const visuals = buildReportVisualizationModel(table);
+      const report = buildAuditReport(table);
+      const markup = (DataCheckCommandFactory as any).renderAuditReportMarkup(
+        table,
+        report,
+      );
 
       assert.equal(visuals.numericCellCount, 9);
       assert.equal(visuals.firstDigitSampleCount, 3);
       assert.equal(visuals.firstDigitBins[0].observedCount, 1);
       assert.equal(visuals.firstDigitBins[1].observedCount, 1);
       assert.equal(visuals.firstDigitBins[2].observedCount, 1);
-      assert.lengthOf(visuals.columnProfiles, 3);
-      assert.deepInclude(
-        visuals.columnProfiles.find((profile) => profile.label === "Value (B)"),
-        {
-          total: 3,
-          numberCount: 3,
-          percentageCount: 0,
-          pValueCount: 0,
-        },
-      );
-      assert.deepInclude(
-        visuals.columnProfiles.find((profile) => profile.label === "Rate (C)"),
-        {
-          total: 3,
-          numberCount: 0,
-          percentageCount: 3,
-          pValueCount: 0,
-        },
-      );
-      assert.deepInclude(
-        visuals.columnProfiles.find((profile) => profile.label === "p (D)"),
-        {
-          total: 3,
-          numberCount: 0,
-          percentageCount: 0,
-          pValueCount: 3,
-        },
-      );
+      assert.equal(visuals.terminalDigitSampleCount, 6);
+      assert.equal(visuals.terminalDigitBins[0].observedCount, 3);
+      assert.equal(visuals.terminalDigitBins[2].observedCount, 1);
+      assert.equal(visuals.terminalDigitBins[5].observedCount, 1);
+      assert.equal(visuals.terminalDigitBins[9].observedCount, 1);
+      assert.include(markup, getString("report-visual-terminal-digits-title"));
+      assert.notInclude(markup, getString("report-visual-column-profile-title"));
     });
   });
 });
