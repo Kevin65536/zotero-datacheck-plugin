@@ -3,6 +3,25 @@ import { registerPrefsScripts } from "./modules/preferenceScript";
 import { getString, initLocale } from "./utils/locale";
 import { createZToolkit } from "./utils/ztoolkit";
 
+function registerPreferencePane() {
+  const preferencePanes = (Zotero as any).PreferencePanes;
+  if (!preferencePanes?.register) {
+    return;
+  }
+
+  preferencePanes.register({
+    pluginID: addon.data.config.addonID,
+    src: `${rootURI}content/preferences.xhtml`,
+    label: getString("prefs-title"),
+    image: `chrome://${addon.data.config.addonRef}/content/icons/favicon.svg`,
+  });
+}
+
+function unregisterPreferencePane() {
+  const preferencePanes = (Zotero as any).PreferencePanes;
+  preferencePanes?.unregister?.(addon.data.config.addonID);
+}
+
 async function onStartup() {
   try {
     await Promise.all([
@@ -12,6 +31,7 @@ async function onStartup() {
     ]);
 
     initLocale();
+    registerPreferencePane();
     addon.api = {
       ...addon.api,
       runAnalyzeCurrentReader: () =>
@@ -69,6 +89,7 @@ async function onMainWindowUnload(_win: Window): Promise<void> {
 }
 
 function onShutdown(): void {
+  unregisterPreferencePane();
   DataCheckCommandFactory.unregisterReaderIntegration();
   ztoolkit.unregisterAll();
   addon.data.dialog?.window?.close();

@@ -19,53 +19,75 @@
     background: color-mix(in srgb, currentColor 4%, transparent);
   }
 
-  .dc-pref-toggle {
+   .dc-pref-section-title {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  .dc-pref-toggle,
+  .dc-pref-columns {
     display: flex;
     align-items: flex-start;
     gap: 10px;
   }
 
-  .dc-pref-toggle input,
-  .dc-pref-detector-item input {
-    margin-top: 2px;
-  }
-
-  .dc-pref-toggle-text,
-  .dc-pref-section-head {
+  .dc-pref-column {
     display: flex;
+    flex: 1;
     flex-direction: column;
-    gap: 4px;
+    gap: 6px;
+    min-width: 220px;
   }
 
-  .dc-pref-detail,
-  .dc-pref-summary {
+  .dc-pref-detail {
     color: color-mix(in srgb, currentColor 72%, transparent);
     font-size: 12px;
     line-height: 1.45;
   }
 
-  .dc-pref-detector-list {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 8px 14px;
-  }
-
-  .dc-pref-detector-list.is-disabled {
-    opacity: 0.55;
-  }
-
-  .dc-pref-detector-item {
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
-    min-height: 24px;
+  .dc-pref-columns {
+    flex-wrap: wrap;
+    row-gap: 6px;
   }
 </html:style>
-<groupbox
-  onload="Zotero.__addonInstance__.hooks.onPrefsEvent('load', { window })"
->
+<groupbox>
   <label><html:h2 data-l10n-id="pref-title"></html:h2></label>
-  <html:div id="__addonRef__-prefs-root" class="dc-pref-root"></html:div>
+  <vbox class="dc-pref-root">
+    <vbox class="dc-pref-card">
+      <checkbox
+        id="zotero-prefpane-__addonRef__-enable"
+        preference="enable"
+        data-l10n-id="pref-enable"
+      />
+      <html:div class="dc-pref-detail" data-l10n-id="pref-enable-detail"></html:div>
+    </vbox>
+
+    <vbox class="dc-pref-card">
+      <html:h3 class="dc-pref-section-title" data-l10n-id="pref-detectors-title"></html:h3>
+      <html:div class="dc-pref-detail" data-l10n-id="pref-detectors-detail"></html:div>
+      <hbox class="dc-pref-columns" align="start">
+        <vbox class="dc-pref-column">
+          <checkbox preference="detectorDuplicateRows" data-l10n-id="pref-detector-duplicate-rows" />
+          <checkbox preference="detectorNearDuplicateRows" data-l10n-id="pref-detector-near-duplicate-rows" />
+          <checkbox preference="detectorDuplicateNumericSequences" data-l10n-id="pref-detector-duplicate-numeric-sequences" />
+          <checkbox preference="detectorBenfordDeviation" data-l10n-id="pref-detector-benford-deviation" />
+        </vbox>
+        <vbox class="dc-pref-column">
+          <checkbox preference="detectorTerminalDigitPreference" data-l10n-id="pref-detector-terminal-digit-preference" />
+          <checkbox preference="detectorRoundingHeaping" data-l10n-id="pref-detector-rounding-heaping" />
+          <checkbox preference="detectorPValueThresholdClustering" data-l10n-id="pref-detector-p-value-threshold-clustering" />
+          <checkbox preference="detectorLowVarianceNumericColumns" data-l10n-id="pref-detector-low-variance-numeric-columns" />
+        </vbox>
+        <vbox class="dc-pref-column">
+          <checkbox preference="detectorRepeatedNumericColumns" data-l10n-id="pref-detector-repeated-numeric-columns" />
+          <checkbox preference="detectorUniformNumericColumns" data-l10n-id="pref-detector-uniform-numeric-columns" />
+          <checkbox preference="detectorInvalidPercentages" data-l10n-id="pref-detector-invalid-percentages" />
+          <checkbox preference="detectorInvalidPValues" data-l10n-id="pref-detector-invalid-p-values" />
+        </vbox>
+      </hbox>
+    </vbox>
+  </vbox>
 </groupbox>
 <vbox>
   <html:label
