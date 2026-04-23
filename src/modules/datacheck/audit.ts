@@ -1079,7 +1079,9 @@ function buildDigitDistributionProfile(
   expectedRatios: number[],
   getDigit: (cell: TableCell) => number | undefined,
 ): BenfordProfile {
-  const digitCounts = new Map(digits.map((digit) => [digit, 0] as const));
+  const digitCounts = new Map<number, number>(
+    digits.map((digit) => [digit, 0]),
+  );
 
   for (const cell of cells) {
     const digit = getDigit(cell);
